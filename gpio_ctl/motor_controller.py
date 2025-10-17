@@ -152,11 +152,11 @@ if __name__ == '__main__':
         time.sleep(3)
 
         print("その場で右回転 (左:正転80%, 右:逆転80%) 3秒間")
-        my_motor.move(80, -80)
+        my_motor.move(50, -50)
         time.sleep(3)
 
         print("左カーブ (左:30%, 右:70%) 3秒間")
-        my_motor.move(30, 70)
+        my_motor.move(-50, 50)
         time.sleep(3)
 
         print("停止")
