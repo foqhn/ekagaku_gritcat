@@ -22,13 +22,15 @@ import lgpio
 from src.oled import OLEDDisplay
 from src.motor_controller import GritMotor
 
+import threading
+
 # --- グローバル変数とロック ---
 latest_imu_msg = None
 latest_image_msg = None
 imu_lock = threading.Lock()
 image_lock = threading.Lock()
 command_queue = queue.Queue()
-
+shutdown_event = threading.Event() 
 # --- ROS 2 ノード ---
 class RosSubscriberNode(Node):
     def __init__(self,command_queue):
@@ -115,23 +117,36 @@ class RosSubscriberNode(Node):
             lgpio.gpiochip_close(self.h) # GPIOハンドルを解放
             
 
-def run_ros_node(command_queue):
+def run_ros_node(cmd_queue, shutdown_evt):
+    print("ROS Node Thread Started")
     rclpy.init()
-    ros_node = RosSubscriberNode(command_queue)
+    ros_node = RosSubscriberNode(cmd_queue)
+    
     try:
-        if ros_node:
-            rclpy.spin(ros_node)
+        # ros_nodeの初期化に失敗した場合は、spinを呼ばずに終了
+        if ros_node.my_motor:
+            # shutdown_evtがセットされるまでループを続ける
+            while not shutdown_evt.is_set():
+                # 0.1秒のタイムアウト付きでROSのイベントを一度だけ処理する
+                # これにより、ループがCPUを100%消費するのを防ぎ、
+                # shutdown_evtをチェックする機会を定期的に作る
+                rclpy.spin_once(ros_node, timeout_sec=0.1)
         else:
-            print("ROS Node failed to initialize.")
-    except KeyboardInterrupt:
-        pass
+            print("ERROR: ROS Node could not start due to motor initialization failure.")
+    
+    except Exception as e:
+        # 通常はここに到達しないはずだが、念のため
+        print(f"An exception occurred in ROS thread: {e}")
+        
     finally:
+        # ループが終了したら（つまりシャットダウンが要求されたら）、後処理を実行
+        print("ROS Node Thread is shutting down...")
         ros_node.cleanup()
         ros_node.destroy_node()
         rclpy.shutdown()
+        print("ROS Node Thread has been shut down successfully.")
 
-# --- FastAPI アプリケーション ---
-app = FastAPI()
+
 
 def imu_to_dict(imu_msg: Imu):
     if not imu_msg:
@@ -153,10 +168,16 @@ def imu_to_dict(imu_msg: Imu):
         }
     }
 
+# --- FastAPI アプリケーション ---
+app = FastAPI()
 template=Jinja2Templates(directory="app/templates")
 @app.get("/")
 async def index(request: Request):
     return template.TemplateResponse("index.html", {"request": request})
+@app.on_event("shutdown")
+def shutdown_handler():
+    print("FastAPI is shutting down. Signaling ROS thread to exit.")
+    shutdown_event.set()
 
 
 @app.websocket("/sensors/imu")
@@ -251,9 +272,10 @@ async def websocket_control_endpoint(websocket: WebSocket):
 
 
 
-
 # --- メイン処理 ---
 if __name__ == "__main__":
-    ros_thread = threading.Thread(target=run_ros_node,args=(command_queue,), daemon=True)
+    ros_thread = threading.Thread(target=run_ros_node,args=(command_queue,shutdown_event), daemon=True)
     ros_thread.start()
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="192.168.0.100", port=8000)
+    ros_thread.join(timeout=5)
+    print("Main application has exited.")
