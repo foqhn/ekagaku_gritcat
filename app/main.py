@@ -1,3 +1,5 @@
+#how to run FastAPI
+# uvicorn main:app --reload
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, Image
