@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>ROS 2 FastAPI Viewer</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <h1>ROS 2 Real-time Data Viewer</h1>
+
+    <h2>IMU Data (/bno055/imu)</h2>
+    <pre id="imu-data">Connecting...</pre>
+
+    <h2>Camera Image (/camera/image_raw)</h2>
+    <img id="camera-image" width="640" height="480" alt="Camera stream will appear here">
+
+    <script>
+        // IMU WebSocket
+        const imu_ws = new WebSocket(`ws://${window.location.host}/sensors/imu`);
+        imu_ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            document.getElementById('imu-data').textContent = JSON.stringify(data, null, 2);
+        };
+        imu_ws.onclose = function(event) {
+            document.getElementById('imu-data').textContent = 'Connection closed.';
+        };
+
+        // Image WebSocket
+        const image_ws = new WebSocket(`ws://${window.location.host}/sensors/image`);
+        image_ws.binaryType = "blob";
+        const imageElement = document.getElementById('camera-image');
+
+        image_ws.onmessage = function(event) {
+            if (typeof event.data === 'string') return; // heartbeat
+            const url = URL.createObjectURL(event.data);
+            imageElement.src = url;
+            imageElement.onload = () => URL.revokeObjectURL(url);
+        };
+        image_ws.onclose = function(event) {
+            console.log('Image WebSocket connection closed.');
+        };
+    </script>
+</body>
+</html>

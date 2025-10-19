@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+opencv-python
+cv_bridge
+rclpy
+pydantic
+jinja2
+python-multipart
