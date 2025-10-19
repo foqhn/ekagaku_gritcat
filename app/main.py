@@ -8,8 +8,10 @@ import asyncio
 import cv2
 import threading
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI ,Request
 from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from cv_bridge import CvBridge
@@ -79,6 +81,12 @@ def imu_to_dict(imu_msg: Imu):
             'x': imu_msg.linear_acceleration.x, 'y': imu_msg.linear_acceleration.y, 'z': imu_msg.linear_acceleration.z
         }
     }
+
+template=Jinja2Templates(directory="app/templates")
+@app.get("/")
+async def index(request: Request):
+    return template.TemplateResponse("index.html", {"request": request})
+
 
 @app.websocket("/sensors/imu")
 async def websocket_imu_endpoint(websocket: WebSocket):
@@ -150,65 +158,7 @@ async def websocket_image_endpoint(websocket: WebSocket):
         print(f"An unexpected error occurred in Image websocket: {e}")
 
 
-# --- HTMLフロントエンド ---
-html = """
-<!DOCTYPE html>
-<html>
-    <head>
-        <title>ROS 2 FastAPI Viewer</title>
-    </head>
-    <body>
-        <h1>ROS 2 Real-time Data Viewer</h1>
-        
-        <h2>IMU Data (/bno055/imu)</h2>
-        <pre id="imu-data">Connecting...</pre>
-        
-        <h2>Camera Image (/camera/image_raw)</h2>
-        <img id="camera-image" width="640" height="480" alt="Camera stream will appear here">
-        
-        <script>
-            // --- IMU WebSocket ---
-            const imu_ws = new WebSocket(`ws://${window.location.host}/sensors/imu`);
-            imu_ws.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                document.getElementById('imu-data').textContent = JSON.stringify(data, null, 2);
-            };
-            imu_ws.onclose = function(event) {
-                document.getElementById('imu-data').textContent = 'Connection closed.';
-            };
-            imu_ws.onerror = function(error) {
-                document.getElementById('imu-data').textContent = `Error: ${error.message}`;
-            };
 
-            // --- Image WebSocket ---
-            const image_ws = new WebSocket(`ws://${window.location.host}/sensors/image`);
-            image_ws.binaryType = "blob";
-            const imageElement = document.getElementById('camera-image');
-            
-            image_ws.onmessage = function(event) {
-
-                console.log("Image WebSocket message received:", event.data);
-
-                const url = URL.createObjectURL(event.data);
-                imageElement.src = url;
-                imageElement.onload = () => {
-                    URL.revokeObjectURL(url);
-                }
-            };
-            image_ws.onclose = function(event) {
-                console.log('Image WebSocket connection closed.');
-            };
-            image_ws.onerror = function(error) {
-                console.log(`Image WebSocket Error: ${error}`);
-            };
-        </script>
-    </body>
-</html>
-"""
-
-@app.get("/")
-async def get():
-    return HTMLResponse(html)
 
 
 # --- メイン処理 ---
