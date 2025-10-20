@@ -10,7 +10,7 @@ class OLEDDisplay:
     luma.oledライブラリを使用してSSD1306 OLEDディスプレイを制御するクラス。
     """
 
-    def __init__(self, port=1, address=0x3C, width=128, height=64, font_path="arial.ttf", font_size=15):
+    def __init__(self, port=1, address=0x3C, width=128, height=64, font_path="arial.ttf", font_size=30):
         """
         OLEDディスプレイを初期化します。
 
@@ -37,7 +37,7 @@ class OLEDDisplay:
             print("I2Cの設定や接続を確認してください。 `sudo i2cdetect -y 1` コマンドが役立ちます。")
             raise
 
-    def display_text(self, text_lines, start_x=5, start_y=5, line_spacing=20):
+    def display_text(self, text_lines, start_x=5, start_y=5, line_spacing=10):
         """
         OLEDに複数行のテキストを表示します。表示前に画面はクリアされます。
 

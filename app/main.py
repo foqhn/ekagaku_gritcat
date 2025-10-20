@@ -28,6 +28,7 @@ imu_lock = threading.Lock()
 image_lock = threading.Lock()
 command_queue = queue.Queue()
 shutdown_event = threading.Event() 
+oled=OLEDDisplay(font_size=15)
 # --- ROS 2 ノード ---
 class RosSubscriberNode(Node):
     def __init__(self,command_queue):
@@ -76,29 +77,24 @@ class RosSubscriberNode(Node):
                 command_data = self.command_queue.get_nowait()
                 self.get_logger().info(f"Processing command: {command_data}")
 
-                command = command_data.get("command")
-                # クライアントから速度が指定されなければ、デフォルト50に設定
-                speed = int(command_data.get("speed", 10)) 
+                command= command_data.get("command")
+        
+                left_speed= int(command_data.get("left", 0)) 
+                right_speed= int(command_data.get("right", 0)) 
 
                 # モーターが動くコマンドの場合のみリレーをONにする
-                if command in ["forward", "backward", "turn_left", "turn_right"]:
-                    lgpio.gpio_write(self.h, self.relay_pin, 1)
+                if command == "move":
+                    if left_speed != 0 or right_speed != 0:
+                        lgpio.gpio_write(self.h, self.relay_pin, 1)  # リレーON
+                    else:
+                        lgpio.gpio_write(self.h, self.relay_pin, 0)  # リレーOFF
+                    self.my_motor.move(left_speed, right_speed)
+                else:
+                    self.my_motor.move(0, 0)  # 安全のため停止
+                    lgpio.gpio_write(self.h, self.relay_pin, 0)  # リレーOFF
                     
+                self.get_logger().info(f"Motors set to Left: {left_speed}, Right: {right_speed}")
 
-                if command == "forward":
-                    self.my_motor.move(speed, speed)
-                elif command == "backward":
-                    self.my_motor.move(-speed, -speed)
-                elif command == "turn_left":
-                    # その場で左回転
-                    self.my_motor.move(-speed, speed)
-                elif command == "turn_right":
-                    # その場で右回転
-                    self.my_motor.move(speed, -speed)
-                elif command == "stop":
-                    self.my_motor.move(0, 0)
-                    # 停止時にリレーをOFFにする
-                    lgpio.gpio_write(self.h, self.relay_pin, 0)
         except queue.Empty:
             pass
         except Exception as e:
@@ -171,6 +167,7 @@ class RobotWebsocketClient:
         self.ros_node = ros_node
         self.uri = f"{server_uri}{robot_id}"
         self.bridge = CvBridge()
+        oled.display_text([f"id : {robot_id}"])
 
     async def run(self):
         async with websockets.connect(self.uri) as websocket:
@@ -203,7 +200,8 @@ class RobotWebsocketClient:
                 imu_data = imu_to_dict(imu_msg) # imu_to_dict関数は現在のコードから流用
                 # データ種別をヘッダーとして付与
                 payload = {"type": "imu", "data": imu_data}
-                await websocket.send(json.dumps(payload))
+                json_frame=json.dumps(payload)
+                await websocket.send(json_frame.encode())
 
             # 画像データの送信 (バイナリ形式)
             cv_image = None
@@ -262,7 +260,7 @@ if __name__ == "__main__":
     #           IPアドレスは実際の基地局PCのものに変更してください
     client = RobotWebsocketClient(
         ros_node=ros_node, 
-        server_uri="ws://192.168.137.1:8000/ws/robot/"
+        server_uri="ws://192.168.0.101:8000/ws/robot/"
     )
 
     try:
@@ -279,4 +277,5 @@ if __name__ == "__main__":
         rclpy.shutdown()
         # ros_threadが終了するのを待つ
         ros_thread.join(timeout=2)
+        oled.clear()
         print("Application has exited.")
