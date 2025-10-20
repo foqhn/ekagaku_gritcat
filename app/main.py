@@ -226,36 +226,57 @@ class RobotWebsocketClient:
             await asyncio.sleep(0.033) # 30fps程度
 
 # --- メイン処理 ---
-def run_ros_node_thread(cmd_queue):
-    rclpy.init()
-    ros_node = RosSubscriberNode(cmd_queue)
-    rclpy.spin(ros_node)
-    ros_node.destroy_node()
-    rclpy.shutdown()
+def run_ros_spin(node):
+    """
+    指定されたROSノードのイベントループを実行する。
+    """
+    print("ROS spin thread started.")
+    try:
+        rclpy.spin(node)
+    except rclpy.executors.ExternalShutdownException:
+        # rclpy.shutdown()が呼ばれるとspinは例外を発生させて終了する
+        print("ROS spin thread gracefully stopped.")
+    finally:
+        # スレッドが終了する際にノードを破棄する
+        node.cleanup() # GPIOリソースの解放
+        node.destroy_node()
+        print("ROS Node destroyed.")
 
 
+# --- メイン処理 ---
 if __name__ == "__main__":
+    # 変更点 1: プロセスの開始時点でROSを一度だけ初期化する
+    rclpy.init()
+
     command_queue = queue.Queue()
+    # 変更点 2: ROSノードのインスタンスをメインスレッドで生成する
+    ros_node = RosSubscriberNode(command_queue)
     
-    # ROSノードを別スレッドで実行
-    ros_thread = threading.Thread(target=run_ros_node_thread, args=(command_queue,), daemon=True)
+    # 変更点 3: ROSのspinを実行するスレッドを開始する
+    #           生成したノードのインスタンスを渡す
+    ros_thread = threading.Thread(target=run_ros_spin, args=(ros_node,), daemon=True)
     ros_thread.start()
 
-    # ROSノードのインスタンスをWebSocketクライアントに渡す
-    # (少し待ってからインスタンスを取得する必要があるかもしれないが、ここでは簡略化)
-    # 簡単にするため、グローバル変数や他の方法でROSノードインスタンスを渡す
-    
-    # ※ この部分は元のコード構造に合わせて調整が必要です。
-    # ここでは、RosSubscriberNodeのインスタンスを生成して渡す単純な例を示します。
-    # 実際には、スレッド間で安全にオブジェクトを共有する設計にしてください。
-    
-    # ダミーのrclpy.init/shutdownを避けるため、ROSノードのオブジェクトを直接生成
-    # （この構造は要検討。ここではコンセプトを示す）
-    rclpy.init()
-    temp_node_for_client = RosSubscriberNode(command_queue)
+    # 変更点 4: WebSocketクライアントにも同じノードのインスタンスを渡す
+    #           (主にコマンドキューを共有するために)
+    #           IPアドレスは実際の基地局PCのものに変更してください
+    client = RobotWebsocketClient(
+        ros_node=ros_node, 
+        server_uri="ws://192.168.137.1:8000/ws/robot/"
+    )
 
-    client = RobotWebsocketClient(ros_node=temp_node_for_client, server_uri="ws://192.168.1.10:8000/ws/robot/") # IPは要変更
     try:
+        # メインスレッドで非同期のWebSocketクライアントを実行
+        print("Starting WebSocket client...")
         asyncio.run(client.run())
+
     except KeyboardInterrupt:
-        print("Client stopped.")
+        print("Application stopped by user (Ctrl+C).")
+        
+    finally:
+        # 変更点 5: アプリケーション終了時にROSをクリーンにシャットダウンする
+        print("Shutting down rclpy...")
+        rclpy.shutdown()
+        # ros_threadが終了するのを待つ
+        ros_thread.join(timeout=2)
+        print("Application has exited.")
