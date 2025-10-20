@@ -7,7 +7,7 @@ from sensor_msgs.msg import Imu, Image
 import asyncio
 import cv2
 import threading
-
+import uuid
 import queue
 import json
 import websockets
@@ -253,8 +253,9 @@ if __name__ == "__main__":
     # （この構造は要検討。ここではコンセプトを示す）
     rclpy.init()
     temp_node_for_client = RosSubscriberNode(command_queue)
-
-    client = RobotWebsocketClient(ros_node=temp_node_for_client, server_uri="ws://192.168.1.10:8000/ws/robot/") # IPは要変更
+    #robot_id は 6桁のランダムなUUIDにする
+    robot_id = str(uuid.uuid4())[:6]
+    client = RobotWebsocketClient(ros_node=temp_node_for_client,robot_id=robot_id, server_uri="ws://192.168.1.10:8000/ws/robot/") # IPは要変更
     try:
         asyncio.run(client.run())
     except KeyboardInterrupt:
