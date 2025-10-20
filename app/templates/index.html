@@ -16,10 +16,19 @@
     <h2>Camera Image (/camera/image_raw)</h2>
     <img id="camera-image" width="640" height="480" alt="Camera stream will appear here">
     <h2>Control Commands</h2>
-    <button id="forward">Forward</button>
-    <button id="stop">Stop</button>
-    <button id="left">Turn Left</button>
-    <button id="right">Turn Right</button>
+    <div id="controls">
+        <div>
+            <label for="speed-slider">Speed: <span id="speed-value">10</span></label>
+            <input type="range" id="speed-slider" min="0" max="100" value="10">
+        </div>
+        <div class="buttons">
+            <button id="forward">Forward</button>
+            <button id="backward">Backward</button>
+            <button id="left">Turn Left</button>
+            <button id="right">Turn Right</button>
+            <button id="stop">Stop</button>
+        </div>
+    </div>
     <script>
         // IMU WebSocket
         const imu_ws = new WebSocket(`ws://${window.location.host}/sensors/imu`);
@@ -52,12 +61,24 @@
         controlSocket.onopen = () => console.log("Control WebSocket connected!");
         controlSocket.onerror = (error) => console.log("WebSocket error: ", error);
         controlSocket.onclose = () => console.log("Control WebSocket disconnected.");
-        // 命令を送信する関数
+
+        // スライダーと表示を初期化
+        const speedSlider = document.getElementById('speed-slider');
+        const speedValue = document.getElementById('speed-value');
+        speedSlider.addEventListener('input', () => {
+            speedValue.textContent = speedSlider.value;
+        });
+
+        // 命令を送信する関数（現在のスピード値を含める）
         function sendCommand(command) {
             if (controlSocket.readyState === WebSocket.OPEN) {
-                const data = JSON.stringify({ "command": command });
+                const speed = parseInt(speedSlider.value, 10);
+                const dataObj = { "command": command, "speed": speed };
+                const data = JSON.stringify(dataObj);
                 controlSocket.send(data);
                 console.log("Sent:", data);
+            } else {
+                console.warn('Control socket not open. ReadyState:', controlSocket.readyState);
             }
         }
 
