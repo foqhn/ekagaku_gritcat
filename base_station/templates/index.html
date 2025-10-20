@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Robot Controller</title>
+    <style>
+        body { font-family: sans-serif; display: flex; }
+        #controls, #data { margin: 20px; }
+        #camera { border: 1px solid black; min-width: 640px; min-height: 480px; background-color: #333; }
+        button { width: 100px; height: 50px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <div>
+        <h2>Camera</h2>
+        <img id="camera" src="" alt="Camera Stream">
+    </div>
+    <div id="data">
+        <h2>IMU Data</h2>
+        <pre id="imu-data">Connecting...</pre>
+        <h3>Connection</h3>
+        <div>
+            <label for="robot-select">Robot ID:</label>
+            <select id="robot-select">
+                <!-- サーバから動的に埋められます -->
+            </select>
+            <button id="connect-btn">Connect</button>
+            <span id="conn-status">Not connected</span>
+        </div>
+        <h2>Controls</h2>
+        <div id="controls">
+            <button onmousedown="sendCommand('forward')" onmouseup="sendCommand('stop')">Forward</button>
+            <br>
+            <button onmousedown="sendCommand('turn_left')" onmouseup="sendCommand('stop')">Left</button>
+            <button onmousedown="sendCommand('stop')">Stop</button>
+            <button onmousedown="sendCommand('turn_right')" onmouseup="sendCommand('stop')">Right</button>
+            <br>
+            <button onmousedown="sendCommand('backward')" onmouseup="sendCommand('stop')">Backward</button>
+        </div>
+    </div>
+
+<script>
+    // UI elements
+    const cameraImage = document.getElementById('camera');
+    const imuDataElement = document.getElementById('imu-data');
+    const robotSelect = document.getElementById('robot-select');
+    const connectBtn = document.getElementById('connect-btn');
+    const connStatus = document.getElementById('conn-status');
+
+    let ws = null;
+    let connectedRobotId = null;
+
+    function updateStatus(text, ok = false) {
+        connStatus.textContent = text;
+        connStatus.style.color = ok ? 'green' : 'red';
+    }
+
+    function connectToSelectedRobot() {
+        const robotId = robotSelect.value.trim();
+        if (!robotId) return;
+
+        // Close existing connection if any
+        if (ws) {
+            try { ws.close(); } catch (e) { /* ignore */ }
+            ws = null;
+            connectedRobotId = null;
+        }
+
+        const url = `ws://${window.location.host}/ws/frontend/${robotId}`;
+        ws = new WebSocket(url);
+
+        updateStatus('Connecting...', false);
+
+        ws.binaryType = 'blob';
+
+        ws.onopen = () => {
+            console.log('Connected to server for', robotId);
+            connectedRobotId = robotId;
+            updateStatus(`Connected: ${robotId}`, true);
+            imuDataElement.textContent = 'Connection established. Waiting for data...';
+        };
+
+        ws.onmessage = (event) => {
+            if (event.data instanceof Blob) {
+                cameraImage.src = URL.createObjectURL(event.data);
+            } else {
+                try {
+                    const message = JSON.parse(event.data);
+                    if (message.type === 'imu') {
+                        imuDataElement.textContent = JSON.stringify(message.data, null, 2);
+                    }
+                } catch (e) {
+                    console.error('Failed to parse JSON:', e);
+                }
+            }
+        };
+
+        ws.onclose = () => {
+            console.log('Connection closed.');
+            imuDataElement.textContent = 'Connection closed.';
+            updateStatus('Not connected', false);
+            connectedRobotId = null;
+            ws = null;
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket Error:', error);
+            imuDataElement.textContent = 'Connection error.';
+            updateStatus('Connection error', false);
+        };
+    }
+
+    connectBtn.addEventListener('click', connectToSelectedRobot);
+
+    // サーバからロボット一覧を取得してセレクトを更新
+    async function fetchRobotList() {
+        try {
+            const resp = await fetch(`/api/robots`);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const list = await resp.json();
+            populateRobotSelect(list);
+        } catch (e) {
+            console.error('Failed to fetch robot list:', e);
+        }
+    }
+
+    function populateRobotSelect(list) {
+        // 現在選ばれている値を保持
+        const current = robotSelect.value;
+        robotSelect.innerHTML = '';
+        if (!Array.isArray(list) || list.length === 0) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = '-- no robots --';
+            robotSelect.appendChild(opt);
+            return;
+        }
+        list.forEach(id => {
+            const opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = id;
+            robotSelect.appendChild(opt);
+        });
+        // 可能なら以前の選択を復元
+        if (current && Array.from(robotSelect.options).some(o => o.value === current)) {
+            robotSelect.value = current;
+        }
+    }
+
+    // 初回取得とポーリング（例: 5秒間隔）
+    fetchRobotList();
+    setInterval(fetchRobotList, 5000);
+
+    function sendCommand(command) {
+        const payload = {
+            command: command,
+            speed: 50
+        };
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(payload));
+            console.log('Sent:', payload);
+        } else {
+            console.warn('WebSocket is not open. Cannot send command.');
+        }
+    }
+</script>
+</body>
+</html>
