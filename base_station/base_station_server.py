@@ -2,12 +2,14 @@ import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from typing import Dict, List
 
 app = FastAPI()
 
 # HTMLテンプレートを読み込む設定
-templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="static"), name="static") # この行を追加
+templates = Jinja2Templates(directory="static")
 
 # 接続中のロボットとフロントエンドを管理するための辞書
 # { "robot_id": {"robot": WebSocket | None, "frontend": WebSocket | None} }
