@@ -88,7 +88,8 @@
 
         updateStatus('Connecting...', false);
 
-        ws.binaryType = 'blob';
+        // ★ 変更点: バイナリデータ(Blob)を直接扱わなくなるため、この行は不要です。
+        // ws.binaryType = 'blob'; 
 
         ws.onopen = () => {
             console.log('Connected to server for', robotId);
@@ -97,20 +98,39 @@
             imuDataElement.textContent = 'Connection established. Waiting for data...';
         };
 
+        // ★ 変更点: メッセージ処理をJSONペイロードを前提としたロジックに全面的に書き換え
         ws.onmessage = (event) => {
-            if (event.data instanceof Blob) {
-                cameraImage.src = URL.createObjectURL(event.data);
-            } else {
-                try {
-                    const message = JSON.parse(event.data);
-                    if (message.type === 'imu') {
-                        imuDataElement.textContent = JSON.stringify(message.data, null, 2);
+            try {
+                // 常にテキストデータ(JSON文字列)として受信し、パースする
+                const payload = JSON.parse(event.data);
+
+                // サーバーから送られてくるデータの型が 'sensor_data' であることを確認
+                if (payload.type === 'sensor_data' && payload.data) {
+                    const data = payload.data;
+
+                    // 1. 画像データが存在すれば、Base64文字列をデコードして表示
+                    if (data.image) {
+                        // 'data:image/jpeg;base64,' というプレフィックスを付けてsrcに設定することで、
+                        // ブラウザがBase64を画像として解釈できるようになります。
+                        cameraImage.src = 'data:image/jpeg;base64,' + data.image;
                     }
-                } catch (e) {
-                    console.error('Failed to parse JSON:', e);
+
+                    // 2. IMUデータが存在すれば、整形して表示
+                    if (data.imu) {
+                        imuDataElement.textContent = JSON.stringify(data.imu, null, 2);
+                    }
+                    
+                    // 3. 将来的にGPSなどのセンサーが増えた場合も、ここに追加できます
+                    // if (data.gps) {
+                    //     document.getElementById('gps-data').textContent = JSON.stringify(data.gps, null, 2);
+                    // }
                 }
+            } catch (e) {
+                // JSONのパースに失敗した場合や、予期しないデータを受信した場合のエラー
+                console.error('Failed to process message:', e, event.data);
             }
         };
+
 
         ws.onclose = () => {
             console.log('Connection closed.');
@@ -187,6 +207,8 @@
             console.warn('WebSocket is not open. Cannot send command.');
         }
     }
+
+    // --- ここから下のJoystickやコマンド送信のロジックは変更ありません ---
 
     /**
      * スライダーの値を使って移動コマンドを送信する

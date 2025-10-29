@@ -51,10 +51,12 @@ async def websocket_robot_endpoint(websocket: WebSocket, robot_id: str):
         # ロボットからのデータはフロントエンドに中継するだけ
         # データ形式(バイナリ/JSON)を問わず受信してそのまま転送
         while True:
-            data = await websocket.receive_bytes() # receive_bytes()で両方受け取れる
+            # テキストデータとして受信
+            data = await websocket.receive_text() 
             frontend_ws = connections[robot_id].get("frontend")
             if frontend_ws:
-                await frontend_ws.send_bytes(data)
+                # テキストデータとして転送
+                await frontend_ws.send_text(data)
 
     except WebSocketDisconnect:
         print(f"Robot '{robot_id}' disconnected.")
