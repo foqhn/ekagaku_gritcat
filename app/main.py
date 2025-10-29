@@ -7,6 +7,7 @@ from sensor_msgs.msg import Imu, Image
 import asyncio
 import cv2
 import threading
+import base64
 
 import queue
 import json
@@ -191,35 +192,37 @@ class RobotWebsocketClient:
                 print(f"Received non-JSON message: {message}")
 
     async def send_sensor_data(self, websocket):
-        """ROSから取得したセンサーデータをサーバーに送信し続ける"""
+        """ROSから取得したセンサーデータを単一のJSON形式でサーバーに送信し続ける"""
         while True:
-            # IMUデータの送信 (JSON形式)
+            # センサーデータを取得
             with imu_lock:
                 imu_msg = latest_imu_msg
-            if imu_msg:
-                imu_data = imu_to_dict(imu_msg) # imu_to_dict関数は現在のコードから流用
-                # データ種別をヘッダーとして付与
-                payload = {"type": "imu", "data": imu_data}
-                json_frame=json.dumps(payload)
-                await websocket.send(json_frame.encode())
-
-            # 画像データの送信 (バイナリ形式)
-            cv_image = None
             with image_lock:
-                if latest_image_msg:
-                    try:
-                        cv_image = self.bridge.imgmsg_to_cv2(latest_image_msg, desired_encoding='bgr8')
-                    except Exception as e:
-                        print(f"Image conversion error: {e}")
+                image_msg = latest_image_msg
 
-            if cv_image is not None:
-                cv_image_flipped = cv2.flip(cv_image, -1)
-                ret, frame = cv2.imencode('.jpg', cv_image_flipped)
-                if ret:
-                    # バイナリデータの前にヘッダー（文字列）を送信して区別する案もあるが、
-                    # まずはバイナリとJSONを混ぜて送信し、フロントエンドで処理する
-                    # サーバー側で中継するだけなら問題ない
-                    await websocket.send(frame.tobytes())
+            # 送信するペイロードを作成
+            payload = {"type": "sensor_data", "data": {}}
+            
+            # IMUデータをペイロードに追加
+            if imu_msg:
+                payload["data"]["imu"] = imu_to_dict(imu_msg)
+
+            # 画像データをBase64エンコードしてペイロードに追加
+            if image_msg:
+                try:
+                    cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding='bgr8')
+                    cv_image_flipped = cv2.flip(cv_image, -1)
+                    ret, frame = cv2.imencode('.jpg', cv_image_flipped)
+                    if ret:
+                        # Base64エンコードして文字列に変換
+                        jpg_as_text = base64.b64encode(frame).decode('utf-8')
+                        payload["data"]["image"] = jpg_as_text
+                except Exception as e:
+                    print(f"Image processing error: {e}")
+
+            # データが何か一つでもあれば送信
+            if payload["data"]:
+                await websocket.send(json.dumps(payload))
 
             await asyncio.sleep(0.033) # 30fps程度
 
