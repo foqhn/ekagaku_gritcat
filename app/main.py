@@ -7,7 +7,7 @@ from sensor_msgs.msg import Imu, Image
 import asyncio
 import cv2
 import threading
-
+import uuid
 import queue
 import json
 import websockets
