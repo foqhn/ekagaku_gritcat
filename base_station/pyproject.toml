@@ -12,3 +12,8 @@ dependencies = [
     "uvicorn>=0.38.0",
     "websockets>=15.0.1",
 ]
+
+[tool.uv.workspace]
+members = [
+    "base_station",
+]
