@@ -20,6 +20,11 @@
     <div id="data">
         <h2>IMU Data</h2>
         <pre id="imu-data">Connecting...</pre>
+        <h2>Magnetometer Data</h2>
+        <pre id="mag-data">Connecting...</pre>
+        <h2>WiFi Data</h2>
+        <pre id="wifi-data">Connecting...</pre>
+    </div>
         <h3>Connection</h3>
         <div>
             <label for="robot-select">Robot ID:</label>
@@ -53,6 +58,8 @@
     // UI elements
     const cameraImage = document.getElementById('camera');
     const imuDataElement = document.getElementById('imu-data');
+    const magDataElement = document.getElementById('mag-data');
+    const wifiDataElement = document.getElementById('wifi-data');
     const robotSelect = document.getElementById('robot-select');
     const connectBtn = document.getElementById('connect-btn');
     const connStatus = document.getElementById('conn-status');
@@ -118,6 +125,12 @@
                     // 2. IMUデータが存在すれば、整形して表示
                     if (data.imu) {
                         imuDataElement.textContent = JSON.stringify(data.imu, null, 2);
+                    }
+                    if(data.mag){
+                        magDataElement.textContent = JSON.stringify(data.mag, null, 2);
+                    }
+                    if(data.wifi){
+                        wifiDataElement.textContent = JSON.stringify(data.wifi, null, 2);
                     }
                     
                     // 3. 将来的にGPSなどのセンサーが増えた場合も、ここに追加できます
