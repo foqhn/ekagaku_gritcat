@@ -7,13 +7,10 @@ from sensor_msgs.msg import Imu, Image
 import asyncio
 import cv2
 import threading
-import uvicorn
-import queue
-from fastapi import FastAPI ,Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 
-from starlette.websockets import WebSocket, WebSocketDisconnect
+import queue
+import json
+import websockets
 
 from cv_bridge import CvBridge
 import numpy as np
@@ -79,29 +76,24 @@ class RosSubscriberNode(Node):
                 command_data = self.command_queue.get_nowait()
                 self.get_logger().info(f"Processing command: {command_data}")
 
-                command = command_data.get("command")
-                # クライアントから速度が指定されなければ、デフォルト50に設定
-                speed = int(command_data.get("speed", 10)) 
+                command= command_data.get("command")
+        
+                left_speed= int(command_data.get("left", 0)) 
+                right_speed= int(command_data.get("right", 0)) 
 
                 # モーターが動くコマンドの場合のみリレーをONにする
-                if command in ["forward", "backward", "turn_left", "turn_right"]:
-                    lgpio.gpio_write(self.h, self.relay_pin, 1)
+                if command == "move":
+                    if left_speed != 0 or right_speed != 0:
+                        lgpio.gpio_write(self.h, self.relay_pin, 1)  # リレーON
+                    else:
+                        lgpio.gpio_write(self.h, self.relay_pin, 0)  # リレーOFF
+                    self.my_motor.move(left_speed, right_speed)
+                else:
+                    self.my_motor.move(0, 0)  # 安全のため停止
+                    lgpio.gpio_write(self.h, self.relay_pin, 0)  # リレーOFF
                     
+                self.get_logger().info(f"Motors set to Left: {left_speed}, Right: {right_speed}")
 
-                if command == "forward":
-                    self.my_motor.move(speed, speed)
-                elif command == "backward":
-                    self.my_motor.move(-speed, -speed)
-                elif command == "turn_left":
-                    # その場で左回転
-                    self.my_motor.move(-speed, speed)
-                elif command == "turn_right":
-                    # その場で右回転
-                    self.my_motor.move(speed, -speed)
-                elif command == "stop":
-                    self.my_motor.move(0, 0)
-                    # 停止時にリレーをOFFにする
-                    lgpio.gpio_write(self.h, self.relay_pin, 0)
         except queue.Empty:
             pass
         except Exception as e:
@@ -168,114 +160,118 @@ def imu_to_dict(imu_msg: Imu):
         }
     }
 
-# --- FastAPI アプリケーション ---
-app = FastAPI()
-template=Jinja2Templates(directory="app/templates")
-@app.get("/")
-async def index(request: Request):
-    return template.TemplateResponse("index.html", {"request": request})
-@app.on_event("shutdown")
-def shutdown_handler():
-    print("FastAPI is shutting down. Signaling ROS thread to exit.")
-    shutdown_event.set()
+# --- WebSocketクライアント ---
+class RobotWebsocketClient:
+    def __init__(self, ros_node, robot_id="robot01", server_uri="ws://<基地局PCのIPアドレス>:8000/ws/robot/"):
+        self.ros_node = ros_node
+        self.uri = f"{server_uri}{robot_id}"
+        self.bridge = CvBridge()
 
+    async def run(self):
+        async with websockets.connect(self.uri) as websocket:
+            print(f"Connected to server: {self.uri}")
 
-@app.websocket("/sensors/imu")
-async def websocket_imu_endpoint(websocket: WebSocket):
-    print("Loaded")
-    await websocket.accept()
-    try:
+            # サーバーからのコマンド受信タスク
+            listen_task = asyncio.create_task(self.listen_for_commands(websocket))
+            # センサーデータの送信タスク
+            send_task = asyncio.create_task(self.send_sensor_data(websocket))
+
+            await asyncio.gather(listen_task, send_task)
+
+    async def listen_for_commands(self, websocket):
+        """サーバーからコマンドを受信し、ROSノードのキューに入れる"""
+        async for message in websocket:
+            try:
+                command_data = json.loads(message)
+                print(f"Received command: {command_data}")
+                self.ros_node.command_queue.put(command_data)
+            except json.JSONDecodeError:
+                print(f"Received non-JSON message: {message}")
+
+    async def send_sensor_data(self, websocket):
+        """ROSから取得したセンサーデータをサーバーに送信し続ける"""
         while True:
+            # IMUデータの送信 (JSON形式)
             with imu_lock:
-                imu_data = imu_to_dict(latest_imu_msg)
-            
-            if imu_data:
-                await websocket.send_json(imu_data)
-            
-            await asyncio.sleep(0.1)
-    except WebSocketDisconnect:
-        print("IMU client disconnected")
-    except Exception as e:
-        print(f"An error occurred in IMU websocket: {e}")
-    # finally:
-    #     await websocket.close() # <-- この行を削除またはコメントアウト
+                imu_msg = latest_imu_msg
+            if imu_msg:
+                imu_data = imu_to_dict(imu_msg) # imu_to_dict関数は現在のコードから流用
+                # データ種別をヘッダーとして付与
+                payload = {"type": "imu", "data": imu_data}
+                await websocket.send(json.dumps(payload))
 
-
-@app.websocket("/sensors/image")
-async def websocket_image_endpoint(websocket: WebSocket):
-    # ★★★ 接続が確立されたかを確認するログを追加 ★★★
-    try:
-        await websocket.accept()
-        print("!!! Image WebSocket client connected successfully !!!")
-    except Exception as e:
-        print(f"!!! WebSocket accept failed: {e} !!!")
-        return
-
-    bridge = CvBridge()
-    try:
-        while True:
-            image_to_send = None
-            cv_image = None # cv_imageをループの先頭で初期化
-
+            # 画像データの送信 (バイナリ形式)
+            cv_image = None
             with image_lock:
                 if latest_image_msg:
-                    # ★★★ 画像変換処理をtry-exceptで囲み、エラーを捕捉する ★★★
                     try:
-                        cv_image = bridge.imgmsg_to_cv2(latest_image_msg, desired_encoding='bgr8')
+                        cv_image = self.bridge.imgmsg_to_cv2(latest_image_msg, desired_encoding='bgr8')
                     except Exception as e:
-                        print(f"!!! Error in cv_bridge.imgmsg_to_cv2: {e} !!!")
-                        # エラーが発生した場合、このループの残りはスキップ
-                        continue
+                        print(f"Image conversion error: {e}")
 
-            # 画像変換が成功した場合のみエンコード処理に進む
             if cv_image is not None:
-                try:
-                    cv_image_flipped = cv2.flip(cv_image, -1)
-                    ret, frame = cv2.imencode('.jpg', cv_image_flipped)
-                    if ret:
-                        image_to_send = frame.tobytes()
-                    else:
-                        print("!!! cv2.imencode failed !!!")
-                except Exception as e:
-                    print(f"!!! Error in cv2.imencode: {e} !!!")
+                cv_image_flipped = cv2.flip(cv_image, -1)
+                ret, frame = cv2.imencode('.jpg', cv_image_flipped)
+                if ret:
+                    # バイナリデータの前にヘッダー（文字列）を送信して区別する案もあるが、
+                    # まずはバイナリとJSONを混ぜて送信し、フロントエンドで処理する
+                    # サーバー側で中継するだけなら問題ない
+                    await websocket.send(frame.tobytes())
 
+            await asyncio.sleep(0.033) # 30fps程度
 
-            if image_to_send:
-                #print(f">>>>> Sending image data via WebSocket (size: {len(image_to_send)} bytes)")
-                await websocket.send_bytes(image_to_send)
-                
-            await asyncio.sleep(0.033)
-            
-    except WebSocketDisconnect:
-        print("Image client disconnected")
-    except Exception as e:
-        print(f"An unexpected error occurred in Image websocket: {e}")
-
-
-@app.websocket("/control")
-async def websocket_control_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    print("Control client connected.")
+# --- メイン処理 ---
+def run_ros_spin(node):
+    """
+    指定されたROSノードのイベントループを実行する。
+    """
+    print("ROS spin thread started.")
     try:
-        while True:
-            # クライアントからJSON形式でデータを受信
-            data = await websocket.receive_json()
-            print(f"Received command from client: {data}")
-            
-            # 受信したコマンドをグローバルなキューに入れる
-            command_queue.put(data)
-            
-    except WebSocketDisconnect:
-        print("Control client disconnected.")
-    except Exception as e:
-        print(f"An error occurred in control websocket: {e}")
-
+        rclpy.spin(node)
+    except rclpy.executors.ExternalShutdownException:
+        # rclpy.shutdown()が呼ばれるとspinは例外を発生させて終了する
+        print("ROS spin thread gracefully stopped.")
+    finally:
+        # スレッドが終了する際にノードを破棄する
+        node.cleanup() # GPIOリソースの解放
+        node.destroy_node()
+        print("ROS Node destroyed.")
 
 
 # --- メイン処理 ---
 if __name__ == "__main__":
-    ros_thread = threading.Thread(target=run_ros_node,args=(command_queue,shutdown_event), daemon=True)
+    # 変更点 1: プロセスの開始時点でROSを一度だけ初期化する
+    rclpy.init()
+
+    command_queue = queue.Queue()
+    # 変更点 2: ROSノードのインスタンスをメインスレッドで生成する
+    ros_node = RosSubscriberNode(command_queue)
+    
+    # 変更点 3: ROSのspinを実行するスレッドを開始する
+    #           生成したノードのインスタンスを渡す
+    ros_thread = threading.Thread(target=run_ros_spin, args=(ros_node,), daemon=True)
     ros_thread.start()
-    uvicorn.run(app, host="192.168.0.100", port=8000)
-    ros_thread.join(timeout=5)
-    print("Main application has exited.")
+
+    # 変更点 4: WebSocketクライアントにも同じノードのインスタンスを渡す
+    #           (主にコマンドキューを共有するために)
+    #           IPアドレスは実際の基地局PCのものに変更してください
+    client = RobotWebsocketClient(
+        ros_node=ros_node, 
+        server_uri="ws://192.168.0.101:8000/ws/robot/"
+    )
+
+    try:
+        # メインスレッドで非同期のWebSocketクライアントを実行
+        print("Starting WebSocket client...")
+        asyncio.run(client.run())
+
+    except KeyboardInterrupt:
+        print("Application stopped by user (Ctrl+C).")
+        
+    finally:
+        # 変更点 5: アプリケーション終了時にROSをクリーンにシャットダウンする
+        print("Shutting down rclpy...")
+        rclpy.shutdown()
+        # ros_threadが終了するのを待つ
+        ros_thread.join(timeout=2)
+        print("Application has exited.")
