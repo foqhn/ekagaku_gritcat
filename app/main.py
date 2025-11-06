@@ -2,7 +2,7 @@
 # uvicorn main:app --reload
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Imu, Image
+from sensor_msgs.msg import Imu, Image,MagneticField
 
 import asyncio
 import cv2
@@ -19,12 +19,14 @@ import numpy as np
 import lgpio
 from src.oled import OLEDDisplay
 from src.motor_controller import GritMotor
+from src.wifi_info import get_wifi_info
 
 import threading
 
 # --- グローバル変数とロック ---
 latest_imu_msg = None
 latest_image_msg = None
+latest_mag_msg = None
 imu_lock = threading.Lock()
 image_lock = threading.Lock()
 command_queue = queue.Queue()
@@ -36,6 +38,8 @@ class RosSubscriberNode(Node):
         super().__init__('ros_fastapi_subscriber')
         self.imu_subscription = self.create_subscription(
             Imu, '/bno055/imu', self.imu_callback, 10)
+        self.mag_subscription = self.create_subscription(
+            MagneticField, '/bno055/mag', self.mag_callback, 10)
         self.image_subscription = self.create_subscription(
             Image, '/camera/image_raw', self.image_callback, 10)
         self.bridge = CvBridge()
@@ -67,6 +71,12 @@ class RosSubscriberNode(Node):
         global latest_image_msg
         with image_lock:
             latest_image_msg = msg
+    
+    def mag_callback(self, msg):
+        global latest_mag_msg
+        with imu_lock:
+            latest_mag_msg = msg
+
         #self.get_logger().info('<<<<< Image data received by ROS node! >>>>>')
     def process_commands(self):
         """キューを監視し、コマンドに応じてモーターを直接制御する"""
@@ -111,34 +121,34 @@ class RosSubscriberNode(Node):
             lgpio.gpiochip_close(self.h) # GPIOハンドルを解放
             
 
-def run_ros_node(cmd_queue, shutdown_evt):
-    print("ROS Node Thread Started")
-    rclpy.init()
-    ros_node = RosSubscriberNode(cmd_queue)
+# def run_ros_node(cmd_queue, shutdown_evt):
+#     print("ROS Node Thread Started")
+#     rclpy.init()
+#     ros_node = RosSubscriberNode(cmd_queue)
     
-    try:
-        # ros_nodeの初期化に失敗した場合は、spinを呼ばずに終了
-        if ros_node.my_motor:
-            # shutdown_evtがセットされるまでループを続ける
-            while not shutdown_evt.is_set():
-                # 0.1秒のタイムアウト付きでROSのイベントを一度だけ処理する
-                # これにより、ループがCPUを100%消費するのを防ぎ、
-                # shutdown_evtをチェックする機会を定期的に作る
-                rclpy.spin_once(ros_node, timeout_sec=0.1)
-        else:
-            print("ERROR: ROS Node could not start due to motor initialization failure.")
+#     try:
+#         # ros_nodeの初期化に失敗した場合は、spinを呼ばずに終了
+#         if ros_node.my_motor:
+#             # shutdown_evtがセットされるまでループを続ける
+#             while not shutdown_evt.is_set():
+#                 # 0.1秒のタイムアウト付きでROSのイベントを一度だけ処理する
+#                 # これにより、ループがCPUを100%消費するのを防ぎ、
+#                 # shutdown_evtをチェックする機会を定期的に作る
+#                 rclpy.spin_once(ros_node, timeout_sec=0.1)
+#         else:
+#             print("ERROR: ROS Node could not start due to motor initialization failure.")
     
-    except Exception as e:
-        # 通常はここに到達しないはずだが、念のため
-        print(f"An exception occurred in ROS thread: {e}")
+#     except Exception as e:
+#         # 通常はここに到達しないはずだが、念のため
+#         print(f"An exception occurred in ROS thread: {e}")
         
-    finally:
-        # ループが終了したら（つまりシャットダウンが要求されたら）、後処理を実行
-        print("ROS Node Thread is shutting down...")
-        ros_node.cleanup()
-        ros_node.destroy_node()
-        rclpy.shutdown()
-        print("ROS Node Thread has been shut down successfully.")
+#     finally:
+#         # ループが終了したら（つまりシャットダウンが要求されたら）、後処理を実行
+#         print("ROS Node Thread is shutting down...")
+#         ros_node.cleanup()
+#         ros_node.destroy_node()
+#         rclpy.shutdown()
+#         print("ROS Node Thread has been shut down successfully.")
 
 
 
@@ -168,7 +178,16 @@ class RobotWebsocketClient:
         self.ros_node = ros_node
         self.uri = f"{server_uri}{robot_id}"
         self.bridge = CvBridge()
-        oled.display_text([f"id : {robot_id}"])
+        self.ssid, self.strength = get_wifi_info()
+        text_lines = []
+        text_lines.append(f"id :  {robot_id}")
+        text_lines.append("")
+        if self.ssid and self.strength:
+            text_lines.append(f"SSID :  {self.ssid}")
+
+        else:
+            text_lines.append("Wi-Fi Not Connected")
+        oled.display_text(text_lines, start_x=5, start_y=5, line_spacing=12)
 
     async def run(self):
         async with websockets.connect(self.uri) as websocket:
@@ -197,6 +216,7 @@ class RobotWebsocketClient:
             # センサーデータを取得
             with imu_lock:
                 imu_msg = latest_imu_msg
+                mag_msg = latest_mag_msg
             with image_lock:
                 image_msg = latest_image_msg
 
@@ -206,6 +226,30 @@ class RobotWebsocketClient:
             # IMUデータをペイロードに追加
             if imu_msg:
                 payload["data"]["imu"] = imu_to_dict(imu_msg)
+            # 磁気データをペイロードに追加
+            if mag_msg:
+                payload["data"]["mag"] = {
+                    'header': {
+                        'stamp': {'sec': mag_msg.header.stamp.sec, 'nanosec': mag_msg.header.stamp.nanosec},
+                        'frame_id': mag_msg.header.frame_id
+                    },
+                    'magnetic_field': {
+                        'x': mag_msg.magnetic_field.x,
+                        'y': mag_msg.magnetic_field.y,
+                        'z': mag_msg.magnetic_field.z
+                    }
+                }
+            ssid, strength = get_wifi_info()
+            if ssid and strength:
+                payload["data"]["wifi"] = {
+                    "ssid": ssid,
+                    "signal_strength": strength
+                }
+            else:
+                payload["data"]["wifi"] = {
+                    "ssid": None,
+                    "signal_strength": None
+                }
 
             # 画像データをBase64エンコードしてペイロードに追加
             if image_msg:
@@ -263,7 +307,7 @@ if __name__ == "__main__":
     #           IPアドレスは実際の基地局PCのものに変更してください
     client = RobotWebsocketClient(
         ros_node=ros_node, 
-        server_uri="ws://192.168.0.101:8000/ws/robot/"
+        server_uri="ws://192.168.137.1:8000/ws/robot/"
     )
 
     try:
