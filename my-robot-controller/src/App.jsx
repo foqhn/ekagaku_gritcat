@@ -8,6 +8,8 @@ import './joystick.css';
 
 
 function App() {
+  // which tool/view is active: 'connect' | 'camera' | 'tools'
+  const [activeTool, setActiveTool] = useState('connect');
     // アプリケーション全体で管理する状態
   const [robotList, setRobotList] = useState([]); // ロボットのリスト
   const [selectedRobot, setSelectedRobot] = useState(''); // 選択されたロボットID
@@ -133,37 +135,93 @@ function App() {
   const handleStop = () => {
     sendCommand('move', 0, 0);
   };
-
   return (
-    <div style={{ display: 'flex' }}>
-      <CameraFeed src={cameraSrc} />
-      
-      <div id="sidebar">
-        <SensorData imu={imuData} mag={magData} wifi={wifiData} />
-        <ConnectionManager
-          robotList={robotList}
-          selectedRobot={selectedRobot}
-          onSelectChange={setSelectedRobot}
-          onToggleConnection={handleToggleConnection}
-          status={connectionStatus}
-          isConnected={isConnected}
-        />
-        <div style={{ margin: '20px' }}>
-          <h2>Controls</h2>
-          <div>
-            <label htmlFor="speed-slider">Speed: </label>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={speed}
-              onChange={(e) => setSpeed(e.target.value)}
+    <div className="app-root">
+      <aside className="sidebar" aria-label="tool sidebar">
+        <button
+          className={`tool-btn ${activeTool === 'connect' ? 'active' : ''}`}
+          onClick={() => setActiveTool('connect')}
+          aria-label="ロボットへの接続"
+          title="ロボットへの接続"
+        >
+          ⛓
+          <span className="tooltip">ロボットへの接続</span>
+        </button>
+
+        <button
+          className={`tool-btn ${activeTool === 'camera' ? 'active' : ''}`}
+          onClick={() => setActiveTool('camera')}
+          aria-label="カメラとセンサーデータの表示"
+          title="カメラ／センサーデータ"
+        >
+          🎥
+          <span className="tooltip">カメラ・センサー</span>
+        </button>
+
+        <button
+          className={`tool-btn ${activeTool === 'controls' ? 'active' : ''}`}
+          onClick={() => setActiveTool('controls')}
+          aria-label="コントロール"
+          title="コントロール／ジョイスティック"
+        >
+          🎛
+          <span className="tooltip">コントロール</span>
+        </button>
+      </aside>
+
+      <main className="main-area" >
+        {activeTool === 'connect' && (
+          <section>
+            <h2>ロボットへの接続</h2>
+            <ConnectionManager
+              robotList={robotList}
+              selectedRobot={selectedRobot}
+              onSelectChange={setSelectedRobot}
+              onToggleConnection={handleToggleConnection}
+              status={connectionStatus}
+              isConnected={isConnected}
             />
-            <span>{speed}</span>
-          </div>
-          <Joystick onMove={handleJoystickMove} onStop={handleStop} speed={speed} />
-        </div>
-      </div>
+          </section>
+        )}
+
+        {activeTool === 'camera' && (
+          <section>
+            <h2>カメラとセンサーデータ</h2>
+            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1 }}>
+                <CameraFeed src={cameraSrc} />
+              </div>
+              <div style={{ width: 360 }}>
+                <SensorData imu={imuData} mag={magData} wifi={wifiData} />
+              </div>
+            </div>
+            <h3>ジョイスティックによる操作</h3>
+            <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
+              <div>
+                <label htmlFor="speed-slider">Speed: </label>
+                <input
+                  id="speed-slider"
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={speed}
+                  onChange={(e) => setSpeed(e.target.value)}
+                />
+                <span style={{ marginLeft: 8 }}>{speed}</span>
+              </div>
+
+              <Joystick onMove={handleJoystickMove} onStop={handleStop} speed={speed} />
+            </div>
+          </section>
+
+        )}
+
+        {activeTool === 'controls' && (
+          <section>
+            
+          </section>
+        )}
+      </main>
     </div>
   );
 }

@@ -1,8 +1,8 @@
+/* App.css */
+
+/* #rootの幅制限を解除 */
 #root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  /* 以前の max-width, margin, padding は削除 */
 }
 
 .logo {
@@ -39,4 +39,81 @@
 
 .read-the-docs {
   color: #888;
+}
+
+/* --- ここから下がレイアウトの核となる部分です --- */
+
+/* Sidebar / tools */
+.app-root {
+  display: flex; /* Flexboxコンテナとして定義 */
+  width: 100vw;  /* 画面の幅いっぱいに設定 */
+  height: 100vh; /* 画面の高さっぱいに設定 */
+  background: #0f1720;
+  color: #eee;
+}
+
+.sidebar {
+  width: 100px;
+  flex-shrink: 0; /* サイドバーの幅を固定 */
+  background: linear-gradient(180deg, #0b1220, #0f1826);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 6px;
+  gap: 10px;
+  border-right: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.tool-btn {
+  width: 100px;
+  height: 100px;
+  border-radius: 10px;
+  background: transparent;
+  color: #bfc7d6;
+  border: none;
+  font-size: 50px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+}
+.tool-btn:hover { background: rgba(255, 255, 255, 0.02); color: #fff; }
+.tool-btn.active { background: linear-gradient(180deg, #1f2937, #111827); color: #fff; box-shadow: 0 6px 18px rgba(0,0,0,0.6); }
+
+/* simple tooltip */
+.tooltip {
+  position: absolute;
+  left: 80px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(10, 12, 16, 0.95);
+  color: #e6eef8;
+  padding: 6px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+  font-size: 20px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.tool-btn:hover .tooltip { opacity: 1; transform: translateY(-50%) translateX(4px); }
+
+/* main area tweaks */
+.main-area {
+  flex: 1; /* 残りの利用可能なスペースをすべて埋める */
+  min-width: 0; /* コンテンツによるレイアウト崩れを防ぐ */
+  overflow: auto; /* コンテンツがはみ出た場合にスクロールさせる */
+  padding: 24px;
+}
+
+.main-area h2 {
+  margin-top: 0;
+  color: #a0a0a0;
+  text-align: left; /* ← App.cssの#rootから継承されていた中央寄せを解除 */
+}
+
+/* sectionやdivのテキストも左寄せに戻す */
+.main-area section, .main-area div {
+  text-align: left;
 }
