@@ -1,0 +1,37 @@
+.wifi-container {
+    display: flex;
+    align-items: center;
+    font-family: sans-serif;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    width: 200px;
+    justify-content: space-between;
+}
+
+.wifi-ssid {
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.wifi-signal-strength {
+    display: flex;
+    align-items: flex-end;
+    height: 20px;
+}
+
+.bar {
+    width: 5px;
+    margin-left: 2px;
+    background-color: #ccc;
+    border-radius: 2px;
+}
+
+.bar:nth-child(1) { height: 25%; }
+.bar:nth-child(2) { height: 50%; }
+.bar:nth-child(3) { height: 75%; }
+.bar:nth-child(4) { height: 100%; }
+
+.bar.active {
+    background-color: #007bff;
+}

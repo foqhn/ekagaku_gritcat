@@ -1,5 +1,7 @@
 // src/components/Joystick.jsx
 import React, { useState, useRef, useEffect } from 'react';
+import './joystick.css';
+
 
 const Joystick = ({ onMove, onStop, speed }) => {
     const [dragging, setDragging] = useState(false);

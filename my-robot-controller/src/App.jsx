@@ -3,8 +3,8 @@ import CameraFeed from './components/CameraFeed'; // 分割した場合
 import SensorData from './components/SensorData'; // 分割した場合
 import ConnectionManager from './components/ConnectionManager'; // 分割した場合
 import Joystick from './components/Joystick';
+import WifiSignal from './components/WifiSignal';
 import './App.css';
-import './joystick.css';
 
 
 function App() {
@@ -173,7 +173,14 @@ function App() {
         {activeTool === 'connect' && (
           <section>
             <h2>ロボットへの接続</h2>
-            <ConnectionManager
+            <div className='connection-instructions'>
+              <p>
+                ロボットに接続するには、まずロボットの電源を入れ、WiFiネットワークに接続してください。
+                次に、以下のドロップダウンメニューから接続したいロボットのIDを選択し、「Connect」ボタンをクリックします。
+              </p>
+            </div>
+            <div>
+              <ConnectionManager
               robotList={robotList}
               selectedRobot={selectedRobot}
               onSelectChange={setSelectedRobot}
@@ -181,6 +188,13 @@ function App() {
               status={connectionStatus}
               isConnected={isConnected}
             />
+            </div>
+            {isConnected && (<section style={{ marginTop: 20 }}>
+              <h3>WiFi Signal Strength</h3>
+              <WifiSignal wifi={JSON.parse(wifiData)} />
+            </section>
+            )}
+            
           </section>
         )}
 
