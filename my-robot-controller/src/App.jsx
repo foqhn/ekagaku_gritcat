@@ -23,6 +23,8 @@ function App() {
   // 制御用の状態
   const [speed, setSpeed] = useState(50);
 
+  const isConnected = ws?.readyState === WebSocket.OPEN;
+
     // --- 副作用の管理 ---
 
   // 1. ロボットリストの定期的な取得
@@ -50,13 +52,22 @@ function App() {
 
   // 2. WebSocketのメッセージハンドリング
   useEffect(() => {
-    if (!ws) return; // wsインスタンスがなければ何もしない
+    if (!ws) return;
 
     ws.onmessage = (event) => {
+      // event.data は常にテキストとして受信される
+      const receivedText = event.data;
+
+      // 1. try...catchブロックで囲む
       try {
-        const payload = JSON.parse(event.data);
-        if (payload.type === 'sensor_data' && payload.data) {
+        // 2. 受け取ったテキストをJSONとしてパース（変換）を試みる
+        const payload = JSON.parse(receivedText);
+
+        // 3. パースに成功した場合のみ、データ構造を検証して処理を続ける
+        // これにより、JSONではあるが期待した形式ではないデータも無視できる
+        if (payload && typeof payload === 'object' && payload.type === 'sensor_data' && payload.data) {
           const data = payload.data;
+          
           if (data.image) {
             setCameraSrc('data:image/jpeg;base64,' + data.image);
           }
@@ -70,41 +81,43 @@ function App() {
             setWifiData(JSON.stringify(data.wifi, null, 2));
           }
         }
-      } catch (e) {
-        console.error('Failed to process message:', e);
+        // 期待した形式のJSONでなければ、何もせず次のメッセージを待つ
+
+      } catch (error) {
+        // 4. JSON.parse() が失敗した場合（データがJSON形式でなかった場合）の処理
+        // アプリケーションをクラッシュさせずに、エラーをコンソールに表示する
+        console.warn("Received non-JSON message, ignoring:", receivedText);
       }
     };
-    
-    // 他のイベントハンドラもここに設定...
-    ws.onclose = () => {
-        setConnectionStatus('Not Connected');
-        setWs(null);
-    };
-    ws.onerror = () => {
-        console.error('WebSocket Error:', error);
-        setConnectionStatus('Connection Error');
-    };
 
-    // wsインスタンスが変わった時だけこのeffectを再実行
+    ws.onclose = () => {
+      setConnectionStatus('Not Connected');
+      setWs(null);
+    };
+    ws.onerror = (error) => {
+      console.error('WebSocket Error:', error);
+      setConnectionStatus('Connection Error');
+    };
+    
   }, [ws]);
 
 
   // --- イベントハンドラ ---
-  const handleConnect = () => {
-    if (ws) {
+  const handleToggleConnection = () => {
+    if (isConnected) {
       ws.close();
+    } else {
+      if (!selectedRobot) return;
+      const url = `ws://${window.location.host}/ws/frontend/${selectedRobot}`;
+      const newWs = new WebSocket(url);
+      setConnectionStatus('Connecting...');
+      newWs.onopen = () => {
+        setConnectionStatus(`Connected: ${selectedRobot}`);
+        setWs(newWs);
+      };
     }
-    if (!selectedRobot) return;
-
-    const url = `ws://${window.location.host}/ws/frontend/${selectedRobot}`;
-    const newWs = new WebSocket(url);
-    setConnectionStatus('Connecting...');
-    newWs.onopen = () => {
-      setConnectionStatus(`Connected: ${selectedRobot}`);
-      setWs(newWs); // WebSocketインスタンスをstateに保存
-    };
   };
-
+  
     // コマンド送信関数
   const sendCommand = (command, left, right) => {
     if (ws && ws.readyState === WebSocket.OPEN) {
