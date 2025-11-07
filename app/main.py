@@ -25,6 +25,7 @@ import threading
 import subprocess
 import signal
 import os
+import time
 
 # --- グローバル変数とロック ---
 latest_imu_msg = None
@@ -111,6 +112,10 @@ class RosSubscriberNode(Node):
                     sensor_type=command_data.get("sensor_type")
                     bin=int(command_data.get("bin"))
                     self.sensor_ctl(sensor_type,bin)
+                elif command=="log":
+                    bin=int(command_data.get("bin"))
+
+
                 else:
                     self.my_motor.move(0, 0)  # 安全のため停止
                     lgpio.gpio_write(self.h, self.relay_pin, 0)  # リレーOFF
@@ -184,7 +189,8 @@ class RosSubscriberNode(Node):
             else:
                 self.get_logger().info(f"{log_prefix} process is not running or already stopped.")
                 setattr(self, proc_attr, None)
-
+    def log_data_csv(self,bin):
+        
     
     def cleanup(self):
         """プログラム終了時にリソースを安全に解放する"""
