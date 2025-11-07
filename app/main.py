@@ -22,6 +22,9 @@ from src.motor_controller import GritMotor
 from src.wifi_info import get_wifi_info
 
 import threading
+import subprocess
+import signal
+import os
 
 # --- グローバル変数とロック ---
 latest_imu_msg = None
@@ -46,6 +49,10 @@ class RosSubscriberNode(Node):
 
         self.h= None
         self.my_motor = None
+
+        #subprocess
+        self.proc_cam = None 
+        self.proc_imu = None
         try:
             self.h= lgpio.gpiochip_open(0)
             self.relay_pin = 17
@@ -100,6 +107,10 @@ class RosSubscriberNode(Node):
                     else:
                         lgpio.gpio_write(self.h, self.relay_pin, 0)  # リレーOFF
                     self.my_motor.move(left_speed, right_speed)
+                elif command =="sensor":
+                    sensor_type=command_data.get("sensor_type")
+                    bin=int(command_data.get("bin"))
+                    self.sensor_ctl(sensor_type,bin)
                 else:
                     self.my_motor.move(0, 0)  # 安全のため停止
                     lgpio.gpio_write(self.h, self.relay_pin, 0)  # リレーOFF
@@ -110,6 +121,70 @@ class RosSubscriberNode(Node):
             pass
         except Exception as e:
             self.get_logger().error(f"Error processing command: {e}")
+    
+        # RosSubscriberNodeクラスのメソッドとして実装
+    def sensor_ctl(self, sensor_type, bin):
+        """指定されたセンサーのROSノードを起動または停止する"""
+        
+        # センサータイプに応じて設定を切り替え
+        if sensor_type == "cam":
+            proc_attr = "proc_cam"
+            command = ["ros2", "run", "camera_ros", "camera_node", "--ros-args", "-p", "format:=YUYV"]
+            log_prefix = "Camera"
+        elif sensor_type == "imu":
+            proc_attr = "proc_imu"
+            command = ["ros2", "launch", "bno055", "bno055.launch.py"]
+            log_prefix = "IMU"
+        else:
+            self.get_logger().error(f"Unknown sensor type specified: {sensor_type}")
+            return
+
+        # getattrを使い、self.proc_cam または self.proc_imu を動的に取得
+        current_proc = getattr(self, proc_attr)
+
+        # --- 起動処理 ---
+        if bin == 1:
+            if current_proc and current_proc.poll() is None:
+                self.get_logger().warn(f"{log_prefix} process is already running.")
+                return
+
+            self.get_logger().info(f"Starting {log_prefix} with command: {' '.join(command)}")
+            new_proc = subprocess.Popen(command, start_new_session=True)
+            
+            # setattrを使い、self.proc_cam または self.proc_imu に新しいプロセスをセット
+            setattr(self, proc_attr, new_proc)
+            
+            self.get_logger().info(f"{log_prefix} process started with PID: {new_proc.pid} and PGID: {os.getpgid(new_proc.pid)}")
+
+        # --- 停止処理 ---
+        else: # bin == 0
+            if current_proc and current_proc.poll() is None:
+                try:
+                    pgid = os.getpgid(current_proc.pid)
+                    self.get_logger().info(f"Stopping {log_prefix} process group (PGID: {pgid})...")
+                    
+                    # SIGINTで穏便な停止を試みる
+                    os.killpg(pgid, signal.SIGINT)
+                    current_proc.wait(timeout=5)
+                    self.get_logger().info(f"{log_prefix} process group gracefully terminated.")
+
+                except subprocess.TimeoutExpired:
+                    self.get_logger().warn(f"{log_prefix} process group did not respond. Forcing termination...")
+                    # タイムアウトしたらSIGKILLで強制停止
+                    os.killpg(pgid, signal.SIGKILL)
+                    current_proc.wait()
+                    self.get_logger().info(f"{log_prefix} process group killed.")
+                
+                except ProcessLookupError:
+                    self.get_logger().warn(f"{log_prefix} process group already disappeared.")
+
+                finally:
+                    # 正常終了でもエラーでも、プロセス変数をクリア
+                    setattr(self, proc_attr, None)
+            else:
+                self.get_logger().info(f"{log_prefix} process is not running or already stopped.")
+                setattr(self, proc_attr, None)
+
     
     def cleanup(self):
         """プログラム終了時にリソースを安全に解放する"""
