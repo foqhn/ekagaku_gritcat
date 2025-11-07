@@ -3,13 +3,17 @@ import './WifiSignal.css'; // スタイルを定義するCSSファイルをイ�
 
 /**
  * Wifiの電波強度を可視化するコンポーネント
- * @param {object} props.wifi - WiFiデータ
- * @param {string} props.wifi.ssid - SSID
- * @param {string} props.wifi.signal_strength - 電波強度
+ * @param {string} props.wifi - WiFiデータ
  */
 const WifiSignal = ({ wifi }) => {
-    const { ssid, signal_strength } = wifi;
-
+    // wifi="Connecting..."という状態を考慮 
+    if (wifi === "Connecting..." || wifi === "No Data") {
+        return <div className="wifi-container">No WiFi Data</div>;
+    }
+    // stringのwifiデータをパース　wifi={ssid: "MyNetwork", signal_strength: "-65"}
+    const wifiData = JSON.parse(wifi);
+    const { ssid, signal_strength } = wifiData;
+    console.log('Parsed WiFi data:', { ssid, signal_strength });
     // 電波強度を数値に変換
     const signalStrengthNumber = parseInt(signal_strength, 10);
 

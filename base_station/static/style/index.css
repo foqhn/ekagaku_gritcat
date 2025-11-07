@@ -1,0 +1,88 @@
+#controls,
+#data {
+    margin: 20px;
+}
+
+#camera {
+    border: 1px solid black;
+    min-width: 640px;
+    min-height: 480px;
+    background-color: #333;
+}
+
+#speed-slider {
+    vertical-align: middle;
+}
+
+#base-container {
+    display: flex;
+    flex-direction: row;
+}
+
+#sensor-toggle {
+    flex: 1;
+}
+
+
+
+
+
+
+
+
+
+
+
+/* ###Component Design### */
+/* トグルスイッチ全体のスタイル */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 34px;
+}
+
+/* HTMLのチェックボックスを非表示にする */
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+/* スイッチの背景部分 */
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: .4s;
+    border-radius: 34px;
+    /* 角を丸くする */
+}
+
+/* スイッチの円（つまみ）部分 */
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 26px;
+    width: 26px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+    /* 円形にする */
+}
+
+/* チェックされた時の背景色 */
+input:checked+.slider {
+    background-color: #2196F3;
+}
+
+/* チェックされた時の円（つまみ）の位置 */
+input:checked+.slider:before {
+    transform: translateX(26px);
+}

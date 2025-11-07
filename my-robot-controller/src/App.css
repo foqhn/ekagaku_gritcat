@@ -2,7 +2,10 @@
 
 /* #rootの幅制限を解除 */
 #root {
-  /* 以前の max-width, margin, padding は削除 */
+  text-align: center;
+  max-width: none;
+  background-color: #282c34;
+  min-height: 100vh;
 }
 
 .logo {
@@ -47,14 +50,15 @@
 .app-root {
   display: flex; /* Flexboxコンテナとして定義 */
   width: 100vw;  /* 画面の幅いっぱいに設定 */
-  height: 100vh; /* 画面の高さっぱいに設定 */
+  height: 100vh; /* 画面の高さいっぱいに設定 */
   background: #0f1720;
   color: #eee;
 }
 
 .sidebar {
-  width: 100px;
-  flex-shrink: 0; /* サイドバーの幅を固定 */
+  flex: 0;
+  width: 120px;
+  flex-shrink: 0;
   background: linear-gradient(180deg, #0b1220, #0f1826);
   display: flex;
   flex-direction: column;
@@ -101,10 +105,13 @@
 
 /* main area tweaks */
 .main-area {
-  flex: 1; /* 残りの利用可能なスペースをすべて埋める */
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;  
+  background-color: #1b1b1b;
   min-width: 0; /* コンテンツによるレイアウト崩れを防ぐ */
   overflow: auto; /* コンテンツがはみ出た場合にスクロールさせる */
-  padding: 24px;
 }
 
 .main-area h2 {
@@ -112,8 +119,42 @@
   color: #a0a0a0;
   text-align: left; /* ← App.cssの#rootから継承されていた中央寄せを解除 */
 }
+.robot-ctl{
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+}
+.programming{
+  flex:1;
+  display: flex;
+  flex-direction: column;
+}
+.prog-menu{
+  flex:1;
+  background-color: #1f2937;
+}
+.prog-editzone{
+  flex: 8;
+  background-color: #111827;
+  padding: 24px;
+  border-radius: 20px;
+}
+
+.robot-info {
+  flex:1;
+  background-color: #5e5e5e;
+  padding: 20px;
+  border-radius: 8px;
+}
+
+.console-window{
+  flex:1;
+  background-color: #000000;
+}
+
 
 /* sectionやdivのテキストも左寄せに戻す */
-.main-area section, .main-area div {
+/* .main-area section, .main-area div {
   text-align: left;
-}
+} */

@@ -1,30 +1,76 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
     <meta charset="UTF-8">
     <title>Robot Controller</title>
     <link rel="stylesheet" href="/static/style/joystick.css">
+    <link rel="stylesheet" href="/static/style/index.css">
     <style>
-        body { font-family: sans-serif; display: flex; }
-        #controls, #data { margin: 20px; }
-        #camera { border: 1px solid black; min-width: 640px; min-height: 480px; background-color: #333; }
-        button { width: 100px; height: 50px; margin: 5px; }
-        #speed-slider { vertical-align: middle; }
+        body {
+            font-family: sans-serif;
+            display: flex;
+        }
+
+        button {
+            width: 100px;
+            height: 50px;
+            margin: 5px;
+        }
     </style>
 </head>
+
 <body>
-    <div>
-        <h2>Camera</h2>
-        <img id="camera" src="" alt="Camera Stream">
-    </div>
-    <div id="data">
-        <h2>IMU Data</h2>
-        <pre id="imu-data">Connecting...</pre>
-        <h2>Magnetometer Data</h2>
-        <pre id="mag-data">Connecting...</pre>
-        <h2>WiFi Data</h2>
-        <pre id="wifi-data">Connecting...</pre>
-    </div>
+    <div id="base-container">
+        <div id="sensor-toggle">
+            <h2>Sensor SW</h2>
+            <div>
+                Camera<br>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="tgl_cam">
+                    <span class="slider"></span>
+                </label><br>
+                IMU<br>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="tgl_imu">
+                    <span class="slider"></span>
+                </label><br>
+                GPS<br>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="tgl_gps">
+                    <span class="slider"></span>
+                </label><br>
+                Temperature<br>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="tgl_tempe">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <hr color="#ff0000">
+            <div>
+                LOG<br>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="tgl_log">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            </pre>
+
+        </div>
+        <div>
+            <h2>Camera</h2>
+            <img id="camera" src="" alt="Camera Stream">
+        </div>
+        <div id="data">
+            <h2>IMU Data</h2>
+            <pre id="imu-data">Connecting...</pre>
+            <h2>Magnetometer Data</h2>
+            <pre id="mag-data">Connecting...</pre>
+            <h2>WiFi Data</h2>
+            <pre id="wifi-data">Connecting...</pre>
+        </div>
         <h3>Connection</h3>
         <div>
             <label for="robot-select">Robot ID:</label>
@@ -54,284 +100,336 @@
             </div>
         </div>
     </div>
-<script>
-    // UI elements
-    const cameraImage = document.getElementById('camera');
-    const imuDataElement = document.getElementById('imu-data');
-    const magDataElement = document.getElementById('mag-data');
-    const wifiDataElement = document.getElementById('wifi-data');
-    const robotSelect = document.getElementById('robot-select');
-    const connectBtn = document.getElementById('connect-btn');
-    const connStatus = document.getElementById('conn-status');
-    const speedSlider = document.getElementById('speed-slider');
-    const speedValue = document.getElementById('speed-value');
+    </div>
+    <script>
+        // UI elements
+        const cameraImage = document.getElementById('camera');
+        const imuDataElement = document.getElementById('imu-data');
+        const magDataElement = document.getElementById('mag-data');
+        const wifiDataElement = document.getElementById('wifi-data');
+        const robotSelect = document.getElementById('robot-select');
+        const connectBtn = document.getElementById('connect-btn');
+        const connStatus = document.getElementById('conn-status');
+        const speedSlider = document.getElementById('speed-slider');
+        const speedValue = document.getElementById('speed-value');
 
-    let ws = null;
-    let connectedRobotId = null;
+        let ws = null;
+        let connectedRobotId = null;
 
-    // スライダーの値表示を更新
-    speedSlider.addEventListener('input', () => {
-        speedValue.textContent = speedSlider.value;
-    });
-
-    function updateStatus(text, ok = false) {
-        connStatus.textContent = text;
-        connStatus.style.color = ok ? 'green' : 'red';
-    }
-
-    function connectToSelectedRobot() {
-        const robotId = robotSelect.value.trim();
-        if (!robotId) return;
-
-        // Close existing connection if any
-        if (ws) {
-            try { ws.close(); } catch (e) { /* ignore */ }
-            ws = null;
-            connectedRobotId = null;
-        }
-
-        const url = `ws://${window.location.host}/ws/frontend/${robotId}`;
-        ws = new WebSocket(url);
-
-        updateStatus('Connecting...', false);
-
-        // ★ 変更点: バイナリデータ(Blob)を直接扱わなくなるため、この行は不要です。
-        // ws.binaryType = 'blob'; 
-
-        ws.onopen = () => {
-            console.log('Connected to server for', robotId);
-            connectedRobotId = robotId;
-            updateStatus(`Connected: ${robotId}`, true);
-            imuDataElement.textContent = 'Connection established. Waiting for data...';
-        };
-
-        // ★ 変更点: メッセージ処理をJSONペイロードを前提としたロジックに全面的に書き換え
-        ws.onmessage = (event) => {
-            try {
-                // 常にテキストデータ(JSON文字列)として受信し、パースする
-                const payload = JSON.parse(event.data);
-
-                // サーバーから送られてくるデータの型が 'sensor_data' であることを確認
-                if (payload.type === 'sensor_data' && payload.data) {
-                    const data = payload.data;
-
-                    // 1. 画像データが存在すれば、Base64文字列をデコードして表示
-                    if (data.image) {
-                        // 'data:image/jpeg;base64,' というプレフィックスを付けてsrcに設定することで、
-                        // ブラウザがBase64を画像として解釈できるようになります。
-                        cameraImage.src = 'data:image/jpeg;base64,' + data.image;
-                    }
-
-                    // 2. IMUデータが存在すれば、整形して表示
-                    if (data.imu) {
-                        imuDataElement.textContent = JSON.stringify(data.imu, null, 2);
-                    }
-                    if(data.mag){
-                        magDataElement.textContent = JSON.stringify(data.mag, null, 2);
-                    }
-                    if(data.wifi){
-                        wifiDataElement.textContent = JSON.stringify(data.wifi, null, 2);
-                    }
-                    
-                    // 3. 将来的にGPSなどのセンサーが増えた場合も、ここに追加できます
-                    // if (data.gps) {
-                    //     document.getElementById('gps-data').textContent = JSON.stringify(data.gps, null, 2);
-                    // }
-                }
-            } catch (e) {
-                // JSONのパースに失敗した場合や、予期しないデータを受信した場合のエラー
-                console.error('Failed to process message:', e, event.data);
-            }
-        };
-
-
-        ws.onclose = () => {
-            console.log('Connection closed.');
-            imuDataElement.textContent = 'Connection closed.';
-            updateStatus('Not connected', false);
-            connectedRobotId = null;
-            ws = null;
-        };
-
-        ws.onerror = (error) => {
-            console.error('WebSocket Error:', error);
-            imuDataElement.textContent = 'Connection error.';
-            updateStatus('Connection error', false);
-        };
-    }
-
-    connectBtn.addEventListener('click', connectToSelectedRobot);
-
-    // サーバからロボット一覧を取得してセレクトを更新
-    async function fetchRobotList() {
-        try {
-            const resp = await fetch(`/api/robots`);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const list = await resp.json();
-            populateRobotSelect(list);
-        } catch (e) {
-            console.error('Failed to fetch robot list:', e);
-        }
-    }
-
-    function populateRobotSelect(list) {
-        // 現在選ばれている値を保持
-        const current = robotSelect.value;
-        robotSelect.innerHTML = '';
-        if (!Array.isArray(list) || list.length === 0) {
-            const opt = document.createElement('option');
-            opt.value = '';
-            opt.textContent = '-- no robots --';
-            robotSelect.appendChild(opt);
-            return;
-        }
-        list.forEach(id => {
-            const opt = document.createElement('option');
-            opt.value = id;
-            opt.textContent = id;
-            robotSelect.appendChild(opt);
+        // スライダーの値表示を更新
+        speedSlider.addEventListener('input', () => {
+            speedValue.textContent = speedSlider.value;
         });
-        // 可能なら以前の選択を復元
-        if (current && Array.from(robotSelect.options).some(o => o.value === current)) {
-            robotSelect.value = current;
+
+        function updateStatus(text, ok = false) {
+            connStatus.textContent = text;
+            connStatus.style.color = ok ? 'green' : 'red';
         }
-    }
 
-    // 初回取得とポーリング（例: 5秒間隔）
-    fetchRobotList();
-    setInterval(fetchRobotList, 5000);
+        function connectToSelectedRobot() {
+            const robotId = robotSelect.value.trim();
+            if (!robotId) return;
 
-    /**
-     * バックエンドにコマンドを送信する共通関数
-     * @param {string} command - コマンド名 (例: 'move')
-     * @param {number} left - 左モーターの速度
-     * @param {number} right - 右モーターの速度
-     */
-    function sendCommand(command, left, right) {
-        const payload = {
-            command: command,
-            left: left,
-            right: right
-        };
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify(payload));
-            console.log('Sent:', payload);
-        } else {
-            console.warn('WebSocket is not open. Cannot send command.');
+            // Close existing connection if any
+            if (ws) {
+                try { ws.close(); } catch (e) { /* ignore */ }
+                ws = null;
+                connectedRobotId = null;
+            }
+
+            const url = `ws://${window.location.host}/ws/frontend/${robotId}`;
+            ws = new WebSocket(url);
+
+            updateStatus('Connecting...', false);
+
+            // ★ 変更点: バイナリデータ(Blob)を直接扱わなくなるため、この行は不要です。
+            // ws.binaryType = 'blob'; 
+
+            ws.onopen = () => {
+                console.log('Connected to server for', robotId);
+                connectedRobotId = robotId;
+                updateStatus(`Connected: ${robotId}`, true);
+                imuDataElement.textContent = 'Connection established. Waiting for data...';
+            };
+
+            // ★ 変更点: メッセージ処理をJSONペイロードを前提としたロジックに全面的に書き換え
+            ws.onmessage = (event) => {
+                try {
+                    // 常にテキストデータ(JSON文字列)として受信し、パースする
+                    const payload = JSON.parse(event.data);
+
+                    // サーバーから送られてくるデータの型が 'sensor_data' であることを確認
+                    if (payload.type === 'sensor_data' && payload.data) {
+                        const data = payload.data;
+
+                        // 1. 画像データが存在すれば、Base64文字列をデコードして表示
+                        if (data.image) {
+                            // 'data:image/jpeg;base64,' というプレフィックスを付けてsrcに設定することで、
+                            // ブラウザがBase64を画像として解釈できるようになります。
+                            cameraImage.src = 'data:image/jpeg;base64,' + data.image;
+                        }
+
+                        // 2. IMUデータが存在すれば、整形して表示
+                        if (data.imu) {
+                            imuDataElement.textContent = JSON.stringify(data.imu, null, 2);
+                        }
+                        if (data.mag) {
+                            magDataElement.textContent = JSON.stringify(data.mag, null, 2);
+                        }
+                        if (data.wifi) {
+                            wifiDataElement.textContent = JSON.stringify(data.wifi, null, 2);
+                        }
+
+                        // 3. 将来的にGPSなどのセンサーが増えた場合も、ここに追加できます
+                        // if (data.gps) {
+                        //     document.getElementById('gps-data').textContent = JSON.stringify(data.gps, null, 2);
+                        // }
+                    }
+                } catch (e) {
+                    // JSONのパースに失敗した場合や、予期しないデータを受信した場合のエラー
+                    console.error('Failed to process message:', e, event.data);
+                }
+            };
+
+
+            ws.onclose = () => {
+                console.log('Connection closed.');
+                imuDataElement.textContent = 'Connection closed.';
+                updateStatus('Not connected', false);
+                connectedRobotId = null;
+                ws = null;
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket Error:', error);
+                imuDataElement.textContent = 'Connection error.';
+                updateStatus('Connection error', false);
+            };
         }
-    }
 
-    // --- ここから下のJoystickやコマンド送信のロジックは変更ありません ---
+        connectBtn.addEventListener('click', connectToSelectedRobot);
 
-    /**
-     * スライダーの値を使って移動コマンドを送信する
-     * @param {string} direction - 'forward', 'backward', 'left', 'right'
-     */
-    function move(direction) {
-        const speed = parseInt(speedSlider.value, 10);
-        let left = 0;
-        let right = 0;
-
-        switch (direction) {
-            case 'forward':
-                left = speed;
-                right = speed;
-                break;
-            case 'backward':
-                left = -speed;
-                right = -speed;
-                break;
-            case 'left':
-                left = -speed;
-                right = speed;
-                break;
-            case 'right':
-                left = speed;
-                right = -speed;
-                break;
+        // サーバからロボット一覧を取得してセレクトを更新
+        async function fetchRobotList() {
+            try {
+                const resp = await fetch(`/api/robots`);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const list = await resp.json();
+                populateRobotSelect(list);
+            } catch (e) {
+                console.error('Failed to fetch robot list:', e);
+            }
         }
-        sendCommand('move', left, right);
-    }
 
-    /**
-     * 停止コマンドを送信する
-     */
-    function stop() {
-        sendCommand('move', 0, 0);
-    }
+        function populateRobotSelect(list) {
+            // 現在選ばれている値を保持
+            const current = robotSelect.value;
+            robotSelect.innerHTML = '';
+            if (!Array.isArray(list) || list.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = '-- no robots --';
+                robotSelect.appendChild(opt);
+                return;
+            }
+            list.forEach(id => {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = id;
+                robotSelect.appendChild(opt);
+            });
+            // 可能なら以前の選択を復元
+            if (current && Array.from(robotSelect.options).some(o => o.value === current)) {
+                robotSelect.value = current;
+            }
+        }
 
-    // --- Joystick implementation ---
-    const joystick = document.getElementById('joystick');
-    const knob = document.getElementById('joy-knob');
-    const joyInfo = document.getElementById('joy-info');
-    const stopBtn = document.getElementById('stop-btn');
+        // 初回取得とポーリング（例: 5秒間隔）
+        fetchRobotList();
+        setInterval(fetchRobotList, 5000);
 
-    let dragging = false;
-    let joyRect = null;
+        /**
+         * バックエンドにコマンドを送信する共通関数
+         * @param {string} command - コマンド名 (例: 'move')
+         * @param {number} left - 左モーターの速度
+         * @param {number} right - 右モーターの速度
+         */
+        function sendCommand_MT(command, left, right) {
+            const payload = {
+                command: command,
+                left: left,
+                right: right
+            };
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(payload));
+                console.log('Sent:', payload);
+            } else {
+                console.warn('WebSocket is not open. Cannot send command.');
+            }
+        }
+        function sendCommand_SENSOR(sensor_type, bool) {
+            let command = 'sensor';
+            const payload = {
+                command: command,
+                sensor_type: sensor_type,
+                bin: bool
+            };
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(payload));
+                console.log('Sent:', payload);
+            } else {
+                console.warn('WebSocket is not open. Cannot send command.');
+            }
+        }
 
-    function updateKnobPosition(x, y) {
-        const cx = joyRect.width / 2;
-        const cy = joyRect.height / 2;
-        const maxRadius = (joyRect.width / 2) - (knob.offsetWidth / 2) - 4; // padding
-        const dx = x - (joyRect.left + cx);
-        const dy = y - (joyRect.top + cy);
-        // clamp to circle
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        const r = Math.min(dist, maxRadius);
-        const angle = Math.atan2(dy, dx);
-        const nx = r * Math.cos(angle);
-        const ny = r * Math.sin(angle);
-        knob.style.transform = `translate(calc(-50% + ${nx}px), calc(-50% + ${ny}px))`;
+        function sendCommand_GNL(command, str) {
+            const payload = {
+                command: command,
+                msg: str
+            };
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(payload));
+                console.log('Sent:', payload);
+            } else {
+                console.warn('WebSocket is not open. Cannot send command.');
+            }
+        }
 
-        // normalize to -1..1
-        const nxNorm = (nx / maxRadius);
-        const nyNorm = (-ny / maxRadius); // invert Y so up is positive
+        // --- ここから下のJoystickやコマンド送信のロジックは変更ありません ---
 
-        // Map joystick to differential drive
-        // forward/backward: nyNorm (-1..1)
-        // left/right rotation: nxNorm (-1..1)
-        const baseSpeed = parseInt(speedSlider.value, 10) / 100; // 0..1
+        /**
+         * スライダーの値を使って移動コマンドを送信する
+         * @param {string} direction - 'forward', 'backward', 'left', 'right'
+         */
+        function move(direction) {
+            const speed = parseInt(speedSlider.value, 10);
+            let left = 0;
+            let right = 0;
 
-        // Simple mixing: left = forward*base +- turn*base
-        const left = Math.round((nyNorm + (-nxNorm)) * baseSpeed * 100);
-        const right = Math.round((nyNorm + (nxNorm)) * baseSpeed * 100);
+            switch (direction) {
+                case 'forward':
+                    left = speed;
+                    right = speed;
+                    break;
+                case 'backward':
+                    left = -speed;
+                    right = -speed;
+                    break;
+                case 'left':
+                    left = -speed;
+                    right = speed;
+                    break;
+                case 'right':
+                    left = speed;
+                    right = -speed;
+                    break;
+            }
+            sendCommand_MT('move', left, right);
+        }
 
-        joyInfo.textContent = `L:${left} R:${right}`;
+        /**
+         * 停止コマンドを送信する
+         */
+        function stop() {
+            sendCommand_MT('move', 0, 0);
+        }
 
-        // send command continuously while dragging
-        if (dragging) sendCommand('move', left, right);
-    }
+        // --- Joystick implementation ---
+        const joystick = document.getElementById('joystick');
+        const knob = document.getElementById('joy-knob');
+        const joyInfo = document.getElementById('joy-info');
+        const stopBtn = document.getElementById('stop-btn');
 
-    function resetKnob() {
-        knob.style.transform = 'translate(-50%, -50%)';
-        joyInfo.textContent = 'Neutral';
-    }
+        let dragging = false;
+        let joyRect = null;
 
-    function onPointerDown(e) {
-        e.preventDefault();
-        dragging = true;
-        joyRect = joystick.getBoundingClientRect();
-        joystick.setPointerCapture(e.pointerId);
-        updateKnobPosition(e.clientX, e.clientY);
-    }
+        function updateKnobPosition(x, y) {
+            const cx = joyRect.width / 2;
+            const cy = joyRect.height / 2;
+            const maxRadius = (joyRect.width / 2) - (knob.offsetWidth / 2) - 4; // padding
+            const dx = x - (joyRect.left + cx);
+            const dy = y - (joyRect.top + cy);
+            // clamp to circle
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const r = Math.min(dist, maxRadius);
+            const angle = Math.atan2(dy, dx);
+            const nx = r * Math.cos(angle);
+            const ny = r * Math.sin(angle);
+            knob.style.transform = `translate(calc(-50% + ${nx}px), calc(-50% + ${ny}px))`;
 
-    function onPointerMove(e) {
-        if (!dragging) return;
-        updateKnobPosition(e.clientX, e.clientY);
-    }
+            // normalize to -1..1
+            const nxNorm = (nx / maxRadius);
+            const nyNorm = (-ny / maxRadius); // invert Y so up is positive
 
-    function onPointerUp(e) {
-        dragging = false;
-        try { joystick.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-        resetKnob();
-        stop();
-    }
+            // Map joystick to differential drive
+            // forward/backward: nyNorm (-1..1)
+            // left/right rotation: nxNorm (-1..1)
+            const baseSpeed = parseInt(speedSlider.value, 10) / 100; // 0..1
 
-    joystick.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('pointermove', onPointerMove);
-    window.addEventListener('pointerup', onPointerUp);
-    stopBtn.addEventListener('click', () => { resetKnob(); stop(); });
+            // Simple mixing: left = forward*base +- turn*base
+            const left = Math.round((nyNorm + (-nxNorm)) * baseSpeed * 100);
+            const right = Math.round((nyNorm + (nxNorm)) * baseSpeed * 100);
 
-</script>
+            joyInfo.textContent = `L:${left} R:${right}`;
+
+            // send command continuously while dragging
+            if (dragging) sendCommand('move', left, right);
+        }
+
+        function resetKnob() {
+            knob.style.transform = 'translate(-50%, -50%)';
+            joyInfo.textContent = 'Neutral';
+        }
+
+        function onPointerDown(e) {
+            e.preventDefault();
+            dragging = true;
+            joyRect = joystick.getBoundingClientRect();
+            joystick.setPointerCapture(e.pointerId);
+            updateKnobPosition(e.clientX, e.clientY);
+        }
+
+        function onPointerMove(e) {
+            if (!dragging) return;
+            updateKnobPosition(e.clientX, e.clientY);
+        }
+
+        function onPointerUp(e) {
+            dragging = false;
+            try { joystick.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+            resetKnob();
+            stop();
+        }
+
+        joystick.addEventListener('pointerdown', onPointerDown);
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
+        stopBtn.addEventListener('click', () => { resetKnob(); stop(); });
+
+        document.getElementById('tgl_cam').addEventListener('change', function () {
+            if (this.checked) {
+                // コンソールにメッセージを出力します
+                console.log('CamスイッチがONになりました。');
+                sendCommand_SENSOR("cam", 1)
+            } else {
+                // OFFになった場合も検知できます
+                console.log('スイッチがOFFになりました。');
+                sendCommand_SENSOR("cam", 0)
+            }
+        })
+        document.getElementById('tgl_imu').addEventListener('change', function () {
+            if (this.checked) {
+                // コンソールにメッセージを出力します
+                console.log('CamスイッチがONになりました。');
+                sendCommand_SENSOR("imu", 1)
+            } else {
+                // OFFになった場合も検知できます
+                console.log('スイッチがOFFになりました。');
+                sendCommand_SENSOR("imu", 0)
+            }
+        })
+
+    </script>
 </body>
+
 </html>

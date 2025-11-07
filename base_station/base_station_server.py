@@ -18,12 +18,12 @@ connections: Dict[str, Dict[str, WebSocket | None]] = {}
 
 # --- HTTP エンドポイント ---
 
-# @app.get("/", response_class=HTMLResponse)
-# async def get_index(request: Request):
-#     """
-#     ブラウザからのアクセス時にindex.htmlを返すエンドポイント
-#     """
-#     return templates.TemplateResponse("index.html", {"request": request})
+@app.get("/", response_class=HTMLResponse)
+async def get_index(request: Request):
+    """
+    ブラウザからのアクセス時にindex.htmlを返すエンドポイント
+    """
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/api/robots", response_model=List[str])
 async def get_robot_list():

@@ -4,13 +4,14 @@ import SensorData from './components/SensorData'; // 分割した場合
 import ConnectionManager from './components/ConnectionManager'; // 分割した場合
 import Joystick from './components/Joystick';
 import WifiSignal from './components/WifiSignal';
+import PythonChecker from './components/PythonChecker';
 import './App.css';
 
 
 function App() {
   // which tool/view is active: 'connect' | 'camera' | 'tools'
   const [activeTool, setActiveTool] = useState('connect');
-    // アプリケーション全体で管理する状態
+  // アプリケーション全体で管理する状態
   const [robotList, setRobotList] = useState([]); // ロボットのリスト
   const [selectedRobot, setSelectedRobot] = useState(''); // 選択されたロボットID
   const [connectionStatus, setConnectionStatus] = useState('Not Connected'); // 接続状態
@@ -21,13 +22,13 @@ function App() {
   const [imuData, setImuData] = useState('Connecting...');
   const [magData, setMagData] = useState('Connecting...');
   const [wifiData, setWifiData] = useState('Connecting...');
-  
+
   // 制御用の状態
   const [speed, setSpeed] = useState(50);
 
   const isConnected = ws?.readyState === WebSocket.OPEN;
 
-    // --- 副作用の管理 ---
+  // --- 副作用の管理 ---
 
   // 1. ロボットリストの定期的な取得
   useEffect(() => {
@@ -69,7 +70,7 @@ function App() {
         // これにより、JSONではあるが期待した形式ではないデータも無視できる
         if (payload && typeof payload === 'object' && payload.type === 'sensor_data' && payload.data) {
           const data = payload.data;
-          
+
           if (data.image) {
             setCameraSrc('data:image/jpeg;base64,' + data.image);
           }
@@ -100,7 +101,7 @@ function App() {
       console.error('WebSocket Error:', error);
       setConnectionStatus('Connection Error');
     };
-    
+
   }, [ws]);
 
 
@@ -119,8 +120,8 @@ function App() {
       };
     }
   };
-  
-    // コマンド送信関数
+
+  // コマンド送信関数
   const sendCommand = (command, left, right) => {
     if (ws && ws.readyState === WebSocket.OPEN) {
       const payload = { command, left, right };
@@ -131,10 +132,17 @@ function App() {
   const handleJoystickMove = (left, right) => {
     sendCommand('move', left, right);
   };
-  
+
   const handleStop = () => {
     sendCommand('move', 0, 0);
   };
+
+
+
+  //#############################################################
+
+
+
   return (
     <div className="app-root">
       <aside className="sidebar" aria-label="tool sidebar">
@@ -170,73 +178,90 @@ function App() {
       </aside>
 
       <main className="main-area" >
-        {activeTool === 'connect' && (
-          <section>
-            <h2>ロボットへの接続</h2>
-            <div className='connection-instructions'>
-              <p>
-                ロボットに接続するには、まずロボットの電源を入れ、WiFiネットワークに接続してください。
-                次に、以下のドロップダウンメニューから接続したいロボットのIDを選択し、「Connect」ボタンをクリックします。
-              </p>
-            </div>
-            <div>
-              <ConnectionManager
-              robotList={robotList}
-              selectedRobot={selectedRobot}
-              onSelectChange={setSelectedRobot}
-              onToggleConnection={handleToggleConnection}
-              status={connectionStatus}
-              isConnected={isConnected}
-            />
-            </div>
-            {isConnected && (<section style={{ marginTop: 20 }}>
-              <h3>WiFi Signal Strength</h3>
-              <WifiSignal wifi={JSON.parse(wifiData)} />
+        <div style={{ flex: "5" }}>
+          {activeTool === 'connect' && (
+            <section style={{ height: "98%" }}>
+              <h2>ロボットへの接続</h2>
+              <div className='robot-ctl'>
+                <div className='programming'>
+                  <div className='prog-menu'>
+
+                  </div>
+                  <div className='prog-editzone'>
+                    <PythonChecker />
+                  </div>
+                </div>
+                <div className="robot-info">
+                  <div className='connection-instructions'>
+                    <p>
+                      ロボットに接続するには、まずロボットの電源を入れ、WiFiネットワークに接続してください。
+                      次に、以下のドロップダウンメニューから接続したいロボットのIDを選択し、「Connect」ボタンをクリックします。
+                    </p>
+                  </div>
+                  <ConnectionManager
+                    robotList={robotList}
+                    selectedRobot={selectedRobot}
+                    onSelectChange={setSelectedRobot}
+                    onToggleConnection={handleToggleConnection}
+                    status={connectionStatus}
+                    isConnected={isConnected}
+                  />
+                  {isConnected && (<section style={{ marginTop: 20 }}>
+                    <div className="wifi-signal">
+                      <h3>WiFi Signal Strength</h3>
+                      <WifiSignal wifi={wifiData} />
+                    </div>
+                  </section>
+                  )}
+                </div>
+              </div>
+
             </section>
-            )}
-            
-          </section>
-        )}
+          )}
 
-        {activeTool === 'camera' && (
-          <section>
-            <h2>カメラとセンサーデータ</h2>
-            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-              <div style={{ flex: 1 }}>
-                <CameraFeed src={cameraSrc} />
+          {activeTool === 'camera' && (
+            <section>
+              <h2>カメラとセンサーデータ</h2>
+              <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+                <div style={{ flex: 1 }}>
+                  <CameraFeed src={cameraSrc} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <SensorData imu={imuData} mag={magData} wifi={wifiData} />
+                </div>
               </div>
-              <div style={{ width: 360 }}>
-                <SensorData imu={imuData} mag={magData} wifi={wifiData} />
+              <h3>ジョイスティックによる操作</h3>
+              <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
+                <div>
+                  <label htmlFor="speed-slider">Speed: </label>
+                  <input
+                    id="speed-slider"
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={speed}
+                    onChange={(e) => setSpeed(e.target.value)}
+                  />
+                  <span style={{ marginLeft: 8 }}>{speed}</span>
+                </div>
+
+                <Joystick onMove={handleJoystickMove} onStop={handleStop} speed={speed} />
               </div>
-            </div>
-            <h3>ジョイスティックによる操作</h3>
-            <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
-              <div>
-                <label htmlFor="speed-slider">Speed: </label>
-                <input
-                  id="speed-slider"
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={speed}
-                  onChange={(e) => setSpeed(e.target.value)}
-                />
-                <span style={{ marginLeft: 8 }}>{speed}</span>
-              </div>
+            </section>
 
-              <Joystick onMove={handleJoystickMove} onStop={handleStop} speed={speed} />
-            </div>
-          </section>
+          )}
 
-        )}
+          {activeTool === 'controls' && (
+            <section>
 
-        {activeTool === 'controls' && (
-          <section>
-            
-          </section>
-        )}
-      </main>
-    </div>
+            </section>
+          )}
+        </div>
+        <div className='console-window'>
+
+        </div>
+      </main >
+    </div >
   );
 }
 
