@@ -15,6 +15,8 @@ import websockets
 
 from cv_bridge import CvBridge
 import numpy as np
+import csv
+from datetime import datetime
 
 import lgpio
 from src.oled import OLEDDisplay
@@ -31,8 +33,14 @@ import time
 latest_imu_msg = None
 latest_image_msg = None
 latest_mag_msg = None
+latest_gps_msg = None
+latest_system_info = {}
+
 imu_lock = threading.Lock()
 image_lock = threading.Lock()
+gps_lock=threading.Lock()
+system_info_lock=threading.Lock()
+
 command_queue = queue.Queue()
 shutdown_event = threading.Event() 
 oled=OLEDDisplay(font_size=15)
@@ -47,6 +55,14 @@ class RosSubscriberNode(Node):
         self.image_subscription = self.create_subscription(
             Image, '/camera/image_raw', self.image_callback, 10)
         self.bridge = CvBridge()
+
+        self.log_directory = "sensor_logs"  # ログ保存用ディレクトリ
+        self.is_logging = False
+        self.log_file = None
+        self.csv_writer = None
+        self.log_timer = None
+        self.temp_log_path = None  # 一時ファイルのフルパス
+        self.final_log_path = None # 最終的なファイルのフルパス
 
         self.h= None
         self.my_motor = None
@@ -113,7 +129,8 @@ class RosSubscriberNode(Node):
                     bin=int(command_data.get("bin"))
                     self.sensor_ctl(sensor_type,bin)
                 elif command=="log":
-                    bin=int(command_data.get("bin"))
+                    bin=int(command_data.get("msg"))
+                    self.log_data_csv(bin) # ログ管理メソッドを呼び出す
 
 
                 else:
@@ -189,11 +206,117 @@ class RosSubscriberNode(Node):
             else:
                 self.get_logger().info(f"{log_prefix} process is not running or already stopped.")
                 setattr(self, proc_attr, None)
-    def log_data_csv(self,bin):
+
+    def log_data_csv(self, bin_command):
+        """
+        サーバーからのコマンドに基づき、ログローテーション方式でCSV記録を開始/停止する。
+        """
+        # --- ログ開始処理 ---
+        if bin_command == 1 and not self.is_logging:
+            try:
+                # ログディレクトリが存在しなければ作成
+                os.makedirs(self.log_directory, exist_ok=True)
+
+                self.is_logging = True
+                
+                # 日時ベースのファイル名を生成
+                base_filename = datetime.now().strftime("%Y%m%d_%H%M%S")
+                
+                # 一時ファイルと最終ファイルのパスを決定
+                self.temp_log_path = os.path.join(self.log_directory, f"{base_filename}_temp.csv")
+                self.final_log_path = os.path.join(self.log_directory, f"{base_filename}.csv")
+                
+                self.get_logger().info(f"Starting new log. Writing to temporary file: {self.temp_log_path}")
+                
+                # "一時ファイル"を書き込みモードで開く
+                self.log_file = open(self.temp_log_path, 'w', newline='')
+                self.csv_writer = csv.writer(self.log_file)
+
+                # ヘッダー行を書き込む (内容は以前と同じ)
+                header = [
+                    "timestamp_sec", "timestamp_nanosec", 
+                    "orient_x", "orient_y", "orient_z", "orient_w",
+                    "ang_vel_x", "ang_vel_y", "ang_vel_z", 
+                    "lin_accel_x", "lin_accel_y", "lin_accel_z",
+                    "mag_x", "mag_y", "mag_z", 
+                    "temperature_celsius", 
+                    "wifi_ssid", "wifi_signal_strength"
+                ]
+                self.csv_writer.writerow(header)
+
+                # 定期書き込みタイマーを開始
+                self.log_timer = self.create_timer(0.1, self._write_log_callback)
+
+            except (IOError, OSError) as e:
+                self.get_logger().error(f"Failed to start logging: {e}")
+                self.is_logging = False # 失敗した場合はステータスを戻す
+
+        # --- ログ停止 & ファイル確定処理 ---
+        elif bin_command == 0 and self.is_logging:
+            self.is_logging = False
+            
+            # 1. タイマーを停止
+            if self.log_timer:
+                self.log_timer.cancel()
+                self.log_timer = None
+            
+            # 2. ファイルハンドルを閉じる (重要！)
+            if self.log_file:
+                self.log_file.close()
+                self.log_file = None
+                self.csv_writer = None
+            
+            # 3. 一時ファイルを最終ファイル名にリネーム
+            try:
+                if self.temp_log_path and os.path.exists(self.temp_log_path):
+                    os.rename(self.temp_log_path, self.final_log_path)
+                    self.get_logger().info(f"Log file finalized: {self.final_log_path}")
+                else:
+                    self.get_logger().warn("Temporary log file not found, nothing to finalize.")
+            except (IOError, OSError) as e:
+                self.get_logger().error(f"Failed to rename log file: {e}")
+
+            # 4. 状態変数をリセット
+            self.temp_log_path = None
+            self.final_log_path = None
         
-    
+        
+    def _write_log_callback(self):
+        """
+        タイマーによって定期的に呼び出され、センサーデータをCSVに書き込む。
+        """
+        # (このメソッドは、現在開いているファイルに書き込むだけなので変更不要)
+        if not self.is_logging or not self.csv_writer:
+            return
+        # ... (データの取得と書き込み処理は以前のまま)
+        # (ヘッダーに合わせてデータを並べる部分を確認してください)
+        with imu_lock:
+            imu_msg = latest_imu_msg
+            mag_msg = latest_mag_msg
+        with gps_lock:
+            gps_msg = latest_gps_msg
+        with system_info_lock:
+            system_info = latest_system_info.copy()
+        if not imu_msg:
+            return
+        row = [
+            imu_msg.header.stamp.sec, imu_msg.header.stamp.nanosec, 
+            imu_msg.orientation.x, imu_msg.orientation.y, imu_msg.orientation.z, imu_msg.orientation.w,
+            imu_msg.angular_velocity.x, imu_msg.angular_velocity.y, imu_msg.angular_velocity.z, 
+            imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z
+        ]
+        row.extend([mag_msg.magnetic_field.x, mag_msg.magnetic_field.y, mag_msg.magnetic_field.z] if mag_msg else [None, None, None])
+        row.append(gps_msg.fix if gps_msg else None)
+        row.append(system_info.get('wifi_ssid'))
+        row.append(system_info.get('wifi_strength'))
+        self.csv_writer.writerow(row)
+
     def cleanup(self):
         """プログラム終了時にリソースを安全に解放する"""
+        if self.is_logging:
+            self.get_logger().info("Finalizing active log due to cleanup...")
+            self.log_data_csv(0) # bin=0 として停止&リネーム処理を呼び出す
+
         if self.h and self.my_motor:
             self.get_logger().info("Cleaning up GPIO resources...")
             self.my_motor.move(0, 0) # 安全のためモーターを停止
@@ -282,14 +405,39 @@ class RobotWebsocketClient:
             await asyncio.gather(listen_task, send_task)
 
     async def listen_for_commands(self, websocket):
-        """サーバーからコマンドを受信し、ROSノードのキューに入れる"""
+        """サーバーからコマンドを受信し、内容に応じて処理を振り分ける"""
         async for message in websocket:
             try:
                 command_data = json.loads(message)
+                command = command_data.get("command")
                 print(f"Received command: {command_data}")
-                self.ros_node.command_queue.put(command_data)
+
+                # --- ここからが変更点 ---
+                if command == "list_log_files":
+                    # ファイル一覧取得コマンドを処理
+                    await self.handle_list_log_files(websocket)
+
+                elif command == "get_log_file":
+                    # ファイル取得コマンドを処理
+                    filename = command_data.get("filename")
+                    if filename:
+                        await self.handle_get_log_file(websocket, filename)
+                    else:
+                        print("Error: 'filename' not provided for get_log_file command.")
+                        # エラーをサーバーに通知するのも良いでしょう
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "message": "'filename' is required for get_log_file."
+                        }))
+                
+                else:
+                    # 従来通りのコマンドはROSノードのキューに入れる
+                    self.ros_node.command_queue.put(command_data)
+
             except json.JSONDecodeError:
                 print(f"Received non-JSON message: {message}")
+            except Exception as e:
+                print(f"Error processing command: {e}")
 
     async def send_sensor_data(self, websocket):
         """ROSから取得したセンサーデータを単一のJSON形式でサーバーに送信し続ける"""
@@ -321,6 +469,11 @@ class RobotWebsocketClient:
                     }
                 }
             ssid, strength = get_wifi_info()
+            with system_info_lock:
+                if ssid and strength:
+                    latest_system_info['wifi_ssid'] = ssid
+                    latest_system_info['wifi_strength'] = strength
+
             if ssid and strength:
                 payload["data"]["wifi"] = {
                     "ssid": ssid,
@@ -349,7 +502,80 @@ class RobotWebsocketClient:
             if payload["data"]:
                 await websocket.send(json.dumps(payload))
 
-            await asyncio.sleep(0.033) # 30fps程度
+            #TODO:FPSをサーバー側からいじれるようにしたい．
+            await asyncio.sleep(0.033) # 30fps程度 
+
+    async def handle_list_log_files(self, websocket):
+        """ログディレクトリ内のCSVファイル一覧をサーバーに送信する"""
+        try:
+            log_dir = self.ros_node.log_directory  # ROSノードが持つログディレクトリのパスを参照
+            if not os.path.isdir(log_dir):
+                await websocket.send(json.dumps({
+                    "type": "error", 
+                    "message": f"Log directory not found: {log_dir}"
+                }))
+                return
+
+            # ディレクトリ内のCSVファイルのみをリストアップ
+            files = [
+                f for f in os.listdir(log_dir) 
+                if f.endswith('.csv') and not f.endswith('_temp.csv')
+            ]
+            
+            # サーバーに応答を送信
+            response = {
+                "type": "log_file_list",
+                "files": files
+            }
+            await websocket.send(json.dumps(response))
+            print(f"Sent log file list: {files}")
+
+        except Exception as e:
+            print(f"Error listing log files: {e}")
+            await websocket.send(json.dumps({"type": "error", "message": str(e)}))
+
+    async def handle_get_log_file(self, websocket, filename):
+        """指定されたログファイルを読み込み、その内容をサーバーに送信する"""
+        try:
+            # --- セキュリティ対策 ---
+            # ファイル名にディレクトリトラバーサル攻撃の可能性がないかチェック
+            if ".." in filename or filename.startswith("/"):
+                raise ValueError("Invalid filename specified.")
+            
+            log_dir = self.ros_node.log_directory
+            file_path = os.path.join(log_dir, filename)
+
+            if os.path.exists(file_path):
+                # ファイルを読み込む
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    file_content = f.read()
+                
+                # サーバーに応答を送信
+                response = {
+                    "type": "log_file_content",
+                    "filename": filename,
+                    "data": file_content
+                }
+                await websocket.send(json.dumps(response))
+                print(f"Sent file content for: {filename}")
+            
+            else:
+                # ファイルが存在しない場合のエラー応答
+                response = {
+                    "type": "error",
+                    "message": "File not found.",
+                    "filename": filename
+                }
+                await websocket.send(json.dumps(response))
+                print(f"File not found: {file_path}")
+
+        except Exception as e:
+            print(f"Error getting log file '{filename}': {e}")
+            await websocket.send(json.dumps({
+                "type": "error", 
+                "message": str(e),
+                "filename": filename
+            }))
 
 # --- メイン処理 ---
 def run_ros_spin(node):

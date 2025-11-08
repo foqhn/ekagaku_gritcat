@@ -22,11 +22,11 @@ def get_wifi_info(interface='wlan0'):
 
         # 正規表現を使ってSSIDを抽出
         ssid_match = re.search(r'ESSID:"(.+?)"', scan_output)
-        ssid = ssid_match.group(1) if ssid_match else None
+        ssid = ssid_match.group(1) if ssid_match else "N/A"
 
         # 正規表現を使って信号レベルを抽出
         signal_match = re.search(r'Signal level=(.+?) dBm', scan_output)
-        signal_level = signal_match.group(1) if signal_match else None
+        signal_level = signal_match.group(1) if signal_match else "N/A"
 
         # Link Qualityから取得する fallback
         if not signal_level:
@@ -39,11 +39,11 @@ def get_wifi_info(interface='wlan0'):
     except subprocess.CalledProcessError as e:
         # コマンド実行に失敗した場合（例：wlan0が存在しない）
         # print(f"Error executing iwconfig: {e}")
-        return (None, None)
+        return ("N/A", "N/A")
     except Exception as e:
         # その他のエラー
         # print(f"An error occurred: {e}")
-        return (None, None)
+        return ("N/A", "N/A")
 
 if __name__ == '__main__':
     ssid, strength = get_wifi_info()
