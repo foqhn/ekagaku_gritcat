@@ -1,55 +1,148 @@
-#controls,
-#data {
-    margin: 20px;
+/* --- 全体設定 --- */
+body {
+    background-color: #1e1e1e;
+    color: #d4d4d4;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0;
+    padding: 20px;
+    height: 100vh;
+    box-sizing: border-box;
 }
 
-#camera {
-    border: 1px solid black;
-    min-width: 640px;
-    min-height: 480px;
-    background-color: #333;
+h2 {
+    color: #4fc1ff;
+    border-bottom: 1px solid #444;
+    padding-bottom: 5px;
+    margin-top: 0;
 }
 
-#speed-slider {
-    vertical-align: middle;
+pre {
+    background-color: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 5px;
+    padding: 10px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    min-height: 40px;
+    color: #a6e22e;
+}
+
+button,
+select {
+    background-color: #3c3c3c;
+    color: #f0f0f0;
+    border: 1px solid #555;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+button:hover,
+select:hover {
+    background-color: #4a4a4a;
+    border-color: #777;
+}
+
+button:active {
+    background-color: #5a5a5a;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid #444;
+    margin: 20px 0;
+}
+
+/* --- レイアウト --- */
+#window {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    margin: 0;
+}
+
+#header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    background-color: #252526;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    flex-shrink: 0;
+}
+
+#header>div {
+    display: flex;
+    align-items: center;
+    gap: 15px;
 }
 
 #base-container {
     display: flex;
-    flex-direction: row;
+    gap: 20px;
+    flex-grow: 1;
+    overflow: hidden;
 }
 
-#sensor-toggle {
+#left-side,
+#center,
+#right-side {
+    background-color: #252526;
+    padding: 20px;
+    border-radius: 8px;
+    overflow-y: auto;
+}
+
+#left-side {
     flex: 1;
 }
 
+#center {
+    flex: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
 
+#right-side {
+    flex: 1;
+}
 
+/* --- ヘッダー要素 --- */
+#conn-status {
+    padding: 5px 10px;
+    border-radius: 12px;
+    font-weight: bold;
+    background-color: #b94a48;
+    /* Not connected color */
+    color: white;
+}
 
+#wifi-data {
+    min-height: 0;
+    margin: 0;
+}
 
-
-
-
-
-
-
-/* ###Component Design### */
-/* トグルスイッチ全体のスタイル */
+/* --- 左サイドバー (センサー) --- */
 .toggle-switch {
     position: relative;
     display: inline-block;
-    width: 60px;
-    height: 34px;
+    width: 50px;
+    height: 28px;
+    margin-top: 5px;
+    margin-bottom: 15px;
 }
 
-/* HTMLのチェックボックスを非表示にする */
 .toggle-switch input {
     opacity: 0;
     width: 0;
     height: 0;
 }
 
-/* スイッチの背景部分 */
 .slider {
     position: absolute;
     cursor: pointer;
@@ -57,32 +150,94 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: #ccc;
+    background-color: #444;
     transition: .4s;
-    border-radius: 34px;
-    /* 角を丸くする */
+    border-radius: 28px;
 }
 
-/* スイッチの円（つまみ）部分 */
 .slider:before {
     position: absolute;
     content: "";
-    height: 26px;
-    width: 26px;
+    height: 20px;
+    width: 20px;
     left: 4px;
     bottom: 4px;
     background-color: white;
     transition: .4s;
     border-radius: 50%;
-    /* 円形にする */
 }
 
-/* チェックされた時の背景色 */
 input:checked+.slider {
     background-color: #2196F3;
 }
 
-/* チェックされた時の円（つまみ）の位置 */
+input:focus+.slider {
+    box-shadow: 0 0 1px #2196F3;
+}
+
 input:checked+.slider:before {
-    transform: translateX(26px);
+    transform: translateX(22px);
+}
+
+/* --- 中央エリア (カメラとコントロール) --- */
+#camera-window {
+    background-color: #000;
+    border: 2px solid #444;
+    border-radius: 5px;
+    width: 320px;
+    height: 240px;
+    margin-bottom: 20px;
+    flex-shrink: 0;
+}
+
+#camera {
+    width: 320px;
+    height: 240px;
+    display: block;
+}
+
+.controls-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 40px;
+    margin-top: 20px;
+}
+
+#speed-slider {
+    width: 200px;
+}
+
+#speed-value {
+    display: inline-block;
+    width: 30px;
+    text-align: center;
+    font-weight: bold;
+}
+
+.stop-btn-small {
+    background-color: #c0392b;
+    color: white;
+    font-weight: bold;
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    border: 3px solid #e74c3c;
+    font-size: 18px;
+}
+
+.stop-btn-small:hover {
+    background-color: #e74c3c;
+    border-color: #c0392b;
+}
+
+/* --- 右サイドバー (データとログファイル) --- */
+#data,
+#logfile_mng {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+#logfile_mng {
+    margin-top: 20px;
 }

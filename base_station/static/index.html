@@ -17,95 +17,120 @@
             height: 50px;
             margin: 5px;
         }
+
+        #download-btn {
+            width: 120px;
+        }
     </style>
 </head>
 
 <body>
-    <div id="base-container">
-        <div id="sensor-toggle">
-            <h2>Sensor SW</h2>
+    <div id="window">
+        <div id='header'>
             <div>
-                Camera<br>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="tgl_cam">
-                    <span class="slider"></span>
-                </label><br>
-                IMU<br>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="tgl_imu">
-                    <span class="slider"></span>
-                </label><br>
-                GPS<br>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="tgl_gps">
-                    <span class="slider"></span>
-                </label><br>
-                Temperature<br>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="tgl_tempe">
-                    <span class="slider"></span>
-                </label>
+                <label for="robot-select">Robot ID:</label>
+                <select id="robot-select">
+                    <!-- サーバから動的に埋められます -->
+                </select>
+                <button id="connect-btn">Connect</button>
+                <span id="conn-status">Not connected</span>
             </div>
-
-            <hr color="#ff0000">
             <div>
-                LOG<br>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="tgl_log">
-                    <span class="slider"></span>
-                </label>
+                <pre id="wifi-data">Connecting...</pre>
             </div>
+        </div>
+        <div id="base-container">
+            <div id="left-side">
+                <h2>Sensor</h2>
+                <div>
+                    Camera<br>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="tgl_cam">
+                        <span class="slider"></span>
+                    </label><br>
+                    IMU<br>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="tgl_imu">
+                        <span class="slider"></span>
+                    </label><br>
+                    GPS<br>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="tgl_gps">
+                        <span class="slider"></span>
+                    </label><br>
+                    Temperature<br>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="tgl_tempe">
+                        <span class="slider"></span>
+                    </label>
+                </div>
 
-            </pre>
+                <hr color="#ff0000">
+                <div>
+                    LOG<br>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="tgl_log">
+                        <span class="slider"></span>
+                    </label>
+                </div>
 
-        </div>
-        <div>
-            <h2>Camera</h2>
-            <img id="camera" src="" alt="Camera Stream">
-        </div>
-        <div id="data">
-            <h2>IMU Data</h2>
-            <pre id="imu-data">Connecting...</pre>
-            <h2>Magnetometer Data</h2>
-            <pre id="mag-data">Connecting...</pre>
-            <h2>WiFi Data</h2>
-            <pre id="wifi-data">Connecting...</pre>
-        </div>
-        <h3>Connection</h3>
-        <div>
-            <label for="robot-select">Robot ID:</label>
-            <select id="robot-select">
-                <!-- サーバから動的に埋められます -->
-            </select>
-            <button id="connect-btn">Connect</button>
-            <span id="conn-status">Not connected</span>
-        </div>
-        <h2>Controls</h2>
-        <div>
-            <label for="speed-slider">Speed:</label>
-            <input type="range" id="speed-slider" min="0" max="100" value="50">
-            <span id="speed-value">50</span>
-        </div>
-        <div class="controls-wrapper">
-            <div>
-                <div class="joystick-container" id="joystick">
-                    <div class="joy-base">
-                        <div class="joy-knob" id="joy-knob"></div>
+                </pre>
+
+            </div>
+            <div id="center">
+                <div id="camera-window">
+                    <img id="camera" src="" alt="Camera Stream" class="cam_stream">
+                </div>
+                <h2>Controls</h2>
+                <div>
+                    <label for="speed-slider">Speed:</label>
+                    <input type="range" id="speed-slider" min="0" max="100" value="50">
+                    <span id="speed-value">50</span>
+                </div>
+                <div class="controls-wrapper">
+                    <div>
+                        <div class="joystick-container" id="joystick">
+                            <div class="joy-base">
+                                <div class="joy-knob" id="joy-knob"></div>
+                            </div>
+                        </div>
+                        <div class="joy-info" id="joy-info">Neutral</div>
+                    </div>
+                    <div>
+                        <button class="stop-btn-small" id="stop-btn">Stop</button>
                     </div>
                 </div>
-                <div class="joy-info" id="joy-info">Neutral</div>
             </div>
-            <div>
-                <button class="stop-btn-small" id="stop-btn">Stop</button>
+            <div id="right-side">
+                <div id="data">
+                    <h2>IMU</h2>
+                    <pre id="imu-data">Connecting...</pre>
+                    <h2>Magnetometer</h2>
+                    <pre id="mag-data">Connecting...</pre>
+                    <h2>GPS</h2>
+                    <pre id="gps-data">Connecting...</pre>
+
+                </div>
+                <div id="logfile_mng">
+                    <button id="reload-file">Reload</button>
+                    <select id="file-select">
+                        <option value="">-- Select a file --</option>
+                    </select>
+                    <!-- ★ 変更点: ダウンロードボタンを追加 (初期状態は非表示) -->
+                    <button id="download-btn" style="display: none;">Download</button>
+                </div>
             </div>
+
         </div>
     </div>
     </div>
+
     <script>
         // UI elements
         const cameraImage = document.getElementById('camera');
         const imuDataElement = document.getElementById('imu-data');
         const magDataElement = document.getElementById('mag-data');
+        const gpsDataElement = document.getElementById('gps-data');
         const wifiDataElement = document.getElementById('wifi-data');
         const robotSelect = document.getElementById('robot-select');
         const connectBtn = document.getElementById('connect-btn');
@@ -113,6 +138,9 @@
         const speedSlider = document.getElementById('speed-slider');
         const speedValue = document.getElementById('speed-value');
 
+        const reloadFileBtn = document.getElementById('reload-file');
+        const fileSelect = document.getElementById('file-select');
+        const downloadBtn = document.getElementById('download-btn');
         let ws = null;
         let connectedRobotId = null;
 
@@ -142,9 +170,6 @@
 
             updateStatus('Connecting...', false);
 
-            // ★ 変更点: バイナリデータ(Blob)を直接扱わなくなるため、この行は不要です。
-            // ws.binaryType = 'blob'; 
-
             ws.onopen = () => {
                 console.log('Connected to server for', robotId);
                 connectedRobotId = robotId;
@@ -164,17 +189,19 @@
 
                         // 1. 画像データが存在すれば、Base64文字列をデコードして表示
                         if (data.image) {
-                            // 'data:image/jpeg;base64,' というプレフィックスを付けてsrcに設定することで、
-                            // ブラウザがBase64を画像として解釈できるようになります。
+                            // 'data:image/jpeg;base64,' というプレフィックスを付けてsrcに設定する
                             cameraImage.src = 'data:image/jpeg;base64,' + data.image;
                         }
 
                         // 2. IMUデータが存在すれば、整形して表示
                         if (data.imu) {
-                            imuDataElement.textContent = JSON.stringify(data.imu, null, 2);
+                            imuDataElement.textContent = "Ready...";
                         }
                         if (data.mag) {
-                            magDataElement.textContent = JSON.stringify(data.mag, null, 2);
+                            magDataElement.textContent = "Ready...";
+                        }
+                        if (data.gps) {
+                            gpsDataElement.textContent = "Ready...";
                         }
                         if (data.wifi) {
                             wifiDataElement.textContent = JSON.stringify(data.wifi, null, 2);
@@ -184,6 +211,13 @@
                         // if (data.gps) {
                         //     document.getElementById('gps-data').textContent = JSON.stringify(data.gps, null, 2);
                         // }
+                    } else if (payload.type === 'log_file_list' && payload.files) {
+                        console.log("Received file list:", payload.files);
+                        populateFileSelect(payload.files);
+
+                    } else if (payload.type === 'log_file_content' && payload.filename && payload.data) {
+                        console.log(`Received content for ${payload.filename}`);
+                        triggerDownload(payload.filename, payload.data);
                     }
                 } catch (e) {
                     // JSONのパースに失敗した場合や、予期しないデータを受信した場合のエラー
@@ -198,6 +232,8 @@
                 updateStatus('Not connected', false);
                 connectedRobotId = null;
                 ws = null;
+                populateFileSelect([]);
+                downloadBtn.style.display = 'none';
             };
 
             ws.onerror = (error) => {
@@ -295,6 +331,19 @@
             }
         }
 
+        function requestLogFile(filename) {
+            const payload = {
+                command: 'get_log_file',
+                filename: filename
+            };
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(payload));
+                console.log('Requested file:', filename);
+            } else {
+                console.warn('WebSocket is not open. Cannot request file.');
+            }
+        }
+
         // --- ここから下のJoystickやコマンド送信のロジックは変更ありません ---
 
         /**
@@ -367,13 +416,13 @@
             const baseSpeed = parseInt(speedSlider.value, 10) / 100; // 0..1
 
             // Simple mixing: left = forward*base +- turn*base
-            const left = Math.round((nyNorm + (-nxNorm)) * baseSpeed * 100);
-            const right = Math.round((nyNorm + (nxNorm)) * baseSpeed * 100);
+            const right = Math.round((nyNorm + (-nxNorm)) * baseSpeed * 100);
+            const left = Math.round((nyNorm + (nxNorm)) * baseSpeed * 100);
 
             joyInfo.textContent = `L:${left} R:${right}`;
 
             // send command continuously while dragging
-            if (dragging) sendCommand('move', left, right);
+            if (dragging) sendCommand_MT('move', left, right);
         }
 
         function resetKnob() {
@@ -407,27 +456,109 @@
         stopBtn.addEventListener('click', () => { resetKnob(); stop(); });
 
         document.getElementById('tgl_cam').addEventListener('change', function () {
-            if (this.checked) {
-                // コンソールにメッセージを出力します
-                console.log('CamスイッチがONになりました。');
-                sendCommand_SENSOR("cam", 1)
-            } else {
-                // OFFになった場合も検知できます
-                console.log('スイッチがOFFになりました。');
-                sendCommand_SENSOR("cam", 0)
-            }
-        })
+            sendCommand_SENSOR("cam", this.checked ? 1 : 0);
+        });
         document.getElementById('tgl_imu').addEventListener('change', function () {
-            if (this.checked) {
-                // コンソールにメッセージを出力します
-                console.log('CamスイッチがONになりました。');
-                sendCommand_SENSOR("imu", 1)
-            } else {
-                // OFFになった場合も検知できます
-                console.log('スイッチがOFFになりました。');
-                sendCommand_SENSOR("imu", 0)
+            sendCommand_SENSOR("imu", this.checked ? 1 : 0);
+        });
+        document.getElementById('tgl_gps').addEventListener('change', function () {
+            sendCommand_SENSOR("gps", this.checked ? 1 : 0);
+        });
+        document.getElementById('tgl_log').addEventListener('change', function () {
+            sendCommand_GNL("log", this.checked ? 1 : 0);
+        });
+
+
+        /**
+         * ★ 新規: 受け取ったファイルリストでセレクトボックスを更新する関数
+         * @param {string[]} files - ファイル名の配列
+         */
+        function populateFileSelect(files) {
+            // 現在の選択を維持（もしあれば）
+            const currentSelection = fileSelect.value;
+            // セレクトボックスをクリア
+            fileSelect.innerHTML = '';
+
+            // デフォルトのオプションを追加
+            const defaultOption = document.createElement('option');
+            defaultOption.value = "";
+            defaultOption.textContent = "-- Select a file --";
+            defaultOption.disabled = true; // 選択できないようにする
+            defaultOption.selected = true; // 最初はこれを選択状態に
+            fileSelect.appendChild(defaultOption);
+
+            if (Array.isArray(files) && files.length > 0) {
+                // ファイルリストをソートして追加（新しいものが上に来るように降順ソート）
+                files.sort().reverse().forEach(filename => {
+                    const option = document.createElement('option');
+                    option.value = filename;
+                    option.textContent = filename;
+                    fileSelect.appendChild(option);
+                });
             }
-        })
+
+            // 以前の選択が新しいリストにあれば復元
+            if (files.includes(currentSelection)) {
+                fileSelect.value = currentSelection;
+            }
+        }
+
+        /**
+         * ★ 新規: CSVデータからダウンロードをトリガーする関数
+         * @param {string} filename - ダウンロードするファイル名
+         * @param {string} csvContent - CSVファイルの内容
+         */
+        function triggerDownload(filename, csvContent) {
+            // BOMを追加してExcelでの文字化けを防ぐ
+            const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+            const blob = new Blob([bom, csvContent], { type: 'text/csv;charset=utf-8;' });
+
+            // ダウンロード用のリンクを生成
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", filename);
+            link.style.visibility = 'hidden';
+
+            // リンクをクリックしてダウンロードを実行し、後片付け
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url); // メモリリークを防ぐ
+        }
+
+
+        // 'Reload' ボタンのクリックイベント
+        reloadFileBtn.addEventListener('click', function () {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log("Requesting log file list...");
+                // シンプルなコマンド送信に変更
+                const payload = { command: 'list_log_files' };
+                ws.send(JSON.stringify(payload));
+            } else {
+                alert("Not connected to any robot.");
+            }
+        });
+
+        // ファイルセレクターの選択が変更された時のイベント
+        fileSelect.addEventListener('change', function () {
+            // 有効なファイルが選択されたらDownloadボタンを表示、そうでなければ非表示
+            if (this.value) {
+                downloadBtn.style.display = 'inline-block';
+            } else {
+                downloadBtn.style.display = 'none';
+            }
+        });
+
+        // 'Download' ボタンのクリックイベント
+        downloadBtn.addEventListener('click', function () {
+            const selectedFile = fileSelect.value;
+            if (selectedFile) {
+                requestLogFile(selectedFile);
+            } else {
+                alert("Please select a file to download.");
+            }
+        });
 
     </script>
 </body>
