@@ -81,6 +81,10 @@
                 <div id="camera-window">
                     <img id="camera" src="" alt="Camera Stream" class="cam_stream">
                 </div>
+                <div id="map-container">
+                    <div id="robot-marker"></div>
+                    <div class="map-grid"></div>
+                </div>
                 <h2>Controls</h2>
                 <div>
                     <label for="speed-slider">Speed:</label>
@@ -137,10 +141,16 @@
         const connStatus = document.getElementById('conn-status');
         const speedSlider = document.getElementById('speed-slider');
         const speedValue = document.getElementById('speed-value');
+        const mapContainer = document.getElementById('map-container');
+        const robotMarker = document.getElementById('robot-marker');
+
+        let originGps = null; // 原点(最初の位置)のGPS座標を保存する変数
+        let mapScale = 3.0;   // 1メートルを何ピクセルで表示するかのスケール (値が大きいほど拡大)
 
         const reloadFileBtn = document.getElementById('reload-file');
         const fileSelect = document.getElementById('file-select');
         const downloadBtn = document.getElementById('download-btn');
+
         let ws = null;
         let connectedRobotId = null;
 
@@ -159,6 +169,8 @@
             if (!robotId) return;
 
             // Close existing connection if any
+            originGps = null;
+
             if (ws) {
                 try { ws.close(); } catch (e) { /* ignore */ }
                 ws = null;
@@ -202,6 +214,7 @@
                         }
                         if (data.gps) {
                             gpsDataElement.textContent = "Ready...";
+                            updateMap(data.gps);
                         }
                         if (data.wifi) {
                             wifiDataElement.textContent = JSON.stringify(data.wifi, null, 2);
@@ -232,6 +245,7 @@
                 updateStatus('Not connected', false);
                 connectedRobotId = null;
                 ws = null;
+                originGps = null;
                 populateFileSelect([]);
                 downloadBtn.style.display = 'none';
             };
@@ -525,6 +539,55 @@
             link.click();
             document.body.removeChild(link);
             URL.revokeObjectURL(url); // メモリリークを防ぐ
+        }
+
+        // ▼▼▼ この関数をまるごと追加 ▼▼▼
+        /**
+         * GPSデータに基づいて地図上のマーカーの位置を更新する
+         * @param {object} gpsData - サーバーから受信したGPSデータオブジェクト
+         */
+        function updateMap(gpsData) {
+            // 緯度経度データがなければ何もしない
+            if (typeof gpsData.latitude !== 'number' || typeof gpsData.longitude !== 'number') return;
+
+            const lat = gpsData.latitude;
+            const lon = gpsData.longitude;
+
+            // 最初の有効なGPSデータを原点として保存
+            if (!originGps) {
+                originGps = { latitude: lat, longitude: lon };
+                // マーカーを中央にリセット
+                robotMarker.style.top = '50%';
+                robotMarker.style.left = '50%';
+                return;
+            }
+
+            // --- 原点からの相対距離(メートル)を計算 ---
+            // 地球の半径 (メートル)
+            const R = 6378137;
+            // 緯度1度あたりの距離 (ラジアンに変換して計算)
+            const dLat = (lat - originGps.latitude) * (Math.PI / 180);
+            // 経度1度あたりの距離 (ラジアンに変換して計算)
+            const dLon = (lon - originGps.longitude) * (Math.PI / 180);
+
+            // y軸の差 (メートル) - 北がプラス
+            const deltaY_m = R * dLat;
+            // x軸の差 (メートル) - 東がプラス
+            const deltaX_m = R * Math.cos(originGps.latitude * (Math.PI / 180)) * dLon;
+
+            // --- ピクセル座標に変換 ---
+            const mapWidth = mapContainer.clientWidth;
+            const mapHeight = mapContainer.clientHeight;
+            const centerX = mapWidth / 2;
+            const centerY = mapHeight / 2;
+
+            // スケールを適用し、地図の座標系に合わせる (Y軸は下がプラスなので反転)
+            const pixelX = centerX + (deltaX_m * mapScale);
+            const pixelY = centerY - (deltaY_m * mapScale);
+
+            // マーカーの位置を更新
+            robotMarker.style.left = `${pixelX}px`;
+            robotMarker.style.top = `${pixelY}px`;
         }
 
 
