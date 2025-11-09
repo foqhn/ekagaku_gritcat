@@ -2,7 +2,7 @@
 # uvicorn main:app --reload
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Imu, Image,MagneticField
+from sensor_msgs.msg import Imu, Image,MagneticField,NavSatFix, NavSatStatus
 
 import asyncio
 import cv2
@@ -34,6 +34,7 @@ latest_imu_msg = None
 latest_image_msg = None
 latest_mag_msg = None
 latest_gps_msg = None
+latest_gps_msg = None
 latest_system_info = {}
 
 imu_lock = threading.Lock()
@@ -54,6 +55,8 @@ class RosSubscriberNode(Node):
             MagneticField, '/bno055/mag', self.mag_callback, 10)
         self.image_subscription = self.create_subscription(
             Image, '/camera/image_raw', self.image_callback, 10)
+        self.gps_subscription = self.create_subscription(
+            NavSatFix, '/gps/fix', self.gps_callback, 10)
         self.bridge = CvBridge()
 
         self.log_directory = "sensor_logs"  # ログ保存用ディレクトリ
@@ -70,6 +73,7 @@ class RosSubscriberNode(Node):
         #subprocess
         self.proc_cam = None 
         self.proc_imu = None
+        self.proc_gps = None
         try:
             self.h= lgpio.gpiochip_open(0)
             self.relay_pin = 17
@@ -100,6 +104,12 @@ class RosSubscriberNode(Node):
         global latest_mag_msg
         with imu_lock:
             latest_mag_msg = msg
+
+    def gps_callback(self, msg):
+        """GPSデータを受信したときのコールバック関数"""
+        global latest_gps_msg
+        with gps_lock:
+            latest_gps_msg = msg
 
         #self.get_logger().info('<<<<< Image data received by ROS node! >>>>>')
     def process_commands(self):
@@ -153,10 +163,17 @@ class RosSubscriberNode(Node):
             proc_attr = "proc_cam"
             command = ["ros2", "run", "camera_ros", "camera_node", "--ros-args", "-p", "format:=YUYV"]
             log_prefix = "Camera"
+
         elif sensor_type == "imu":
             proc_attr = "proc_imu"
             command = ["ros2", "launch", "bno055", "bno055.launch.py"]
             log_prefix = "IMU"
+
+        elif sensor_type == "gps":
+            proc_attr = "proc_gps"
+            command = ["ros2", "run", "gpsd_driver", "gpsd_client_node"]
+            log_prefix = "GPS"
+
         else:
             self.get_logger().error(f"Unknown sensor type specified: {sensor_type}")
             return
@@ -238,7 +255,8 @@ class RosSubscriberNode(Node):
                     "orient_x", "orient_y", "orient_z", "orient_w",
                     "ang_vel_x", "ang_vel_y", "ang_vel_z", 
                     "lin_accel_x", "lin_accel_y", "lin_accel_z",
-                    "mag_x", "mag_y", "mag_z", 
+                    "mag_x", "mag_y", "mag_z",
+                    "gps_status", "latitude", "longitude", "altitude",
                     "temperature_celsius", 
                     "wifi_ssid", "wifi_signal_strength"
                 ]
@@ -306,7 +324,10 @@ class RosSubscriberNode(Node):
             imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z
         ]
         row.extend([mag_msg.magnetic_field.x, mag_msg.magnetic_field.y, mag_msg.magnetic_field.z] if mag_msg else [None, None, None])
-        row.append(gps_msg.fix if gps_msg else None)
+        if gps_msg:
+            row.extend([gps_msg.status.status, gps_msg.latitude, gps_msg.longitude, gps_msg.altitude])
+        else:
+            row.extend([None, None, None, None])
         row.append(system_info.get('wifi_ssid'))
         row.append(system_info.get('wifi_strength'))
         self.csv_writer.writerow(row)
@@ -374,6 +395,26 @@ def imu_to_dict(imu_msg: Imu):
         'linear_acceleration': {
             'x': imu_msg.linear_acceleration.x, 'y': imu_msg.linear_acceleration.y, 'z': imu_msg.linear_acceleration.z
         }
+    }
+### GPS追加 ###
+def gps_to_dict(gps_msg: NavSatFix):
+    """NavSatFixメッセージを辞書形式に変換する"""
+    if not gps_msg:
+        return None
+    return {
+        'header': {
+            'stamp': {'sec': gps_msg.header.stamp.sec, 'nanosec': gps_msg.header.stamp.nanosec},
+            'frame_id': gps_msg.header.frame_id
+        },
+        'status': {
+            'status': gps_msg.status.status,
+            'service': gps_msg.status.service
+        },
+        'latitude': gps_msg.latitude,
+        'longitude': gps_msg.longitude,
+        'altitude': gps_msg.altitude,
+        'position_covariance': list(gps_msg.position_covariance),
+        'position_covariance_type': gps_msg.position_covariance_type
     }
 
 # --- WebSocketクライアント ---
@@ -448,6 +489,8 @@ class RobotWebsocketClient:
                 mag_msg = latest_mag_msg
             with image_lock:
                 image_msg = latest_image_msg
+            with gps_lock:
+                gps_msg = latest_gps_msg
 
             # 送信するペイロードを作成
             payload = {"type": "sensor_data", "data": {}}
@@ -468,6 +511,9 @@ class RobotWebsocketClient:
                         'z': mag_msg.magnetic_field.z
                     }
                 }
+            if gps_msg:
+                payload["data"]["gps"] = gps_to_dict(gps_msg)
+                
             ssid, strength = get_wifi_info()
             with system_info_lock:
                 if ssid and strength:
@@ -615,6 +661,7 @@ if __name__ == "__main__":
     client = RobotWebsocketClient(
         ros_node=ros_node, 
         server_uri="ws://192.168.137.1:8000/ws/robot/"
+        #server_uri="wss://ekagaku-robot.onrender.com/ws/robot/1"
     )
 
     try:
