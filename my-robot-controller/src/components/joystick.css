@@ -1,0 +1,59 @@
+/* Simple joystick styles */
+:root {
+    --joy-size: 220px;
+    --knob-size: 80px;
+    --base-color: #222;
+    --accent: #4CAF50;
+}
+.joystick-container {
+    width: var(--joy-size);
+    height: var(--joy-size);
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #444 0%, #222 60%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    touch-action: none; /* allow dragging without scrolling */
+    user-select: none;
+}
+.joy-base {
+    width: 90%;
+    height: 90%;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.03);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+.joy-knob {
+    width: var(--knob-size);
+    height: var(--knob-size);
+    border-radius: 50%;
+    background: linear-gradient(180deg, #fafafa, #ddd);
+    box-shadow: 0 6px 12px rgba(0,0,0,0.4), inset 0 -6px 10px rgba(0,0,0,0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    transition: transform 0.06s linear;
+}
+.joy-info {
+    margin-top: 8px;
+    font-size: 13px;
+    text-align: center;
+}
+.controls-wrapper { display:flex; gap:12px; align-items:center }
+.stop-btn-small {
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: #f44336;
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+.stop-btn-small:active { transform: translateY(1px); }
