@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
-import CameraFeed from './components/CameraFeed'; // 分割した場合
-import SensorData from './components/SensorData'; // 分割した場合
-import ConnectionManager from './components/ConnectionManager'; // 分割した場合
+import CameraFeed from './components/CameraFeed';
+import SensorData from './components/SensorData';
+import ConnectionManager from './components/ConnectionManager';
 import Joystick from './components/Joystick';
 import WifiSignal from './components/WifiSignal';
-import PythonChecker from './components/PythonChecker';
+import BlockEditor from './components/BlockEditor';
 import './App.css';
 
 
@@ -25,6 +25,9 @@ function App() {
 
   // 制御用の状態
   const [speed, setSpeed] = useState(50);
+
+  // ブロックエディタからのコード
+  const [generatedCode, setGeneratedCode] = useState('');
 
   const isConnected = ws?.readyState === WebSocket.OPEN;
 
@@ -187,8 +190,18 @@ function App() {
                   <div className='prog-menu'>
 
                   </div>
-                  <div className='prog-editzone'>
-                    <PythonChecker />
+                  <div className='prog-editzone' style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                    <div style={{ flex: 1, minHeight: '400px' }}>
+                      <BlockEditor onCodeChange={setGeneratedCode} />
+                    </div>
+                    <div style={{ height: '150px', marginTop: '10px' }}>
+                      <h3>Generated Python Code</h3>
+                      <textarea
+                        value={generatedCode}
+                        readOnly
+                        style={{ width: '100%', height: '100px', fontFamily: 'monospace' }}
+                      />
+                    </div>
                   </div>
                 </div>
                 <div className="robot-info">
