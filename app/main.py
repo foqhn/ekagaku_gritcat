@@ -4,6 +4,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, Image,MagneticField,NavSatFix, NavSatStatus
 
+import ctypes
 import asyncio
 import cv2
 import threading
@@ -22,6 +23,7 @@ import lgpio
 from src.oled import OLEDDisplay
 from src.motor_controller import GritMotor
 from src.wifi_info import get_wifi_info
+from src.bme280_lgpio import BME280
 
 import threading
 import subprocess
@@ -45,6 +47,211 @@ system_info_lock=threading.Lock()
 command_queue = queue.Queue()
 shutdown_event = threading.Event() 
 oled=OLEDDisplay(font_size=15)
+
+def raise_keyboard_interrupt(thread_obj):
+    """
+    指定したスレッド内部で強制的に KeyboardInterrupt を発生させる
+    """
+    if not thread_obj.is_alive():
+        return
+    
+    tid = ctypes.c_long(thread_obj.ident)
+    ex_type = ctypes.py_object(KeyboardInterrupt) # ここをSystemExitから変更
+    
+    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ex_type)
+    if res == 0:
+        print("Error: Invalid thread ID")
+    elif res > 1:
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None)
+
+
+class RobotController:
+    def __init__(self, ros_node, stop_event):
+        self.ros_node = ros_node
+        self._stop_event = stop_event # 停止指示を受け取るフラグ
+
+    def _check_stop(self):
+        """停止フラグが立っていたら例外を投げてスクリプトを強制終了させる"""
+        if self._stop_event.is_set():
+            raise InterruptedError("Program stopped by user.")
+
+    def move(self, left, right, duration=None):
+        self._check_stop()
+        cmd = {"command": "move", "left": int(left), "right": int(right)}
+        self.ros_node.command_queue.put(cmd)
+
+        if duration is not None:
+            self.sleep(duration)
+            self.stop()
+
+    def stop(self):
+        cmd = {"command": "move", "left": 0, "right": 0}
+        self.ros_node.command_queue.put(cmd)
+
+    def sleep(self, seconds):
+        """中断可能なスリープ"""
+        start_time = time.time()
+        while time.time() - start_time < seconds:
+            self._check_stop()
+            time.sleep(0.1) # 0.1秒ごとに停止チェック
+
+    # センサー取得などは以前と同じ
+    def get_imu(self):
+        self._check_stop()
+        with imu_lock:
+            return imu_to_dict(latest_imu_msg)
+            
+    def print(self, text):
+        print(f"[Robot]: {text}")
+
+
+class ScriptManager:
+    def __init__(self, ros_node):
+        self.ros_node = ros_node
+        self.script_path = "user_program.py"  # 保存するファイル名
+        self.stop_event = threading.Event()
+        self.execution_thread = None
+        
+        # 物理ボタンの設定 (例: GPIO 27番ピンを使用)
+        self.button_pin = 27
+        try:
+            # ros_nodeですでに開かれているGPIOハンドルを使用
+            lgpio.gpio_claim_input(self.ros_node.h, self.button_pin, lgpio.SET_PULL_UP)
+            self.ros_node.get_logger().info(f"Button initialized on pin {self.button_pin}")
+        except Exception as e:
+            self.ros_node.get_logger().error(f"Button init error: {e}")
+
+    def save_code(self, code_str):
+        """コードをファイルに保存"""
+        try:
+            # 改行コードの統一
+            normalized_code = code_str.replace('\r\n', '\n').replace('\r', '\n')
+            with open(self.script_path, "w", encoding="utf-8") as f:
+                f.write(normalized_code)
+            print(f"Code saved to {self.script_path}")
+            return True
+        except Exception as e:
+            print(f"Save error: {e}")
+            return False
+
+    def start_program(self):
+        """保存されたプログラムを実行"""
+        if self.execution_thread and self.execution_thread.is_alive():
+            print("Program is already running.")
+            return
+
+        if not os.path.exists(self.script_path):
+            print("No program file found.")
+            return
+
+        print(">>> Starting User Program >>>")
+        self.stop_event.clear()
+        
+        # ファイルからコードを読み込む
+        with open(self.script_path, "r", encoding="utf-8") as f:
+            code_str = f.read()
+
+        self.execution_thread = threading.Thread(
+            target=self._run_script_thread, 
+            args=(code_str,), 
+            daemon=True
+        )
+        self.execution_thread.start()
+
+    def stop_program(self):
+        """ユーザープログラムにキーボード割り込みを送る"""
+        if self.execution_thread and self.execution_thread.is_alive():
+            print(">>> Sending KeyboardInterrupt to User Script... >>>")
+            
+            # 1. 念のためフラグも立てる
+            self.stop_event.set()
+            
+            # 2. スレッドに KeyboardInterrupt を注入！
+            raise_keyboard_interrupt(self.execution_thread)
+            
+            # 3. 終了を待つ
+            self.execution_thread.join(timeout=2)
+            
+            # それでも止まらなければ...（基本ここには来ない）
+            if self.execution_thread.is_alive():
+                print("Warning: Script is stubborn. SystemExit injection.")
+                # SystemExitで追撃（最終手段）
+                self._inject_system_exit() 
+
+        # モーター停止
+        self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
+        self.stop_event.clear()
+
+    def _run_script_thread(self, code_str):
+        """
+        ユーザーコードを安全な保護ブロックの中で実行するメソッド
+        """
+        # 1. APIインスタンスの準備
+        robot = RobotController(self.ros_node, self.stop_event)
+        
+        # 2. ユーザーコードに渡す機能の制限/定義
+        # ここに定義したものだけがユーザーコード内で使える
+        local_scope = {
+            "robot": robot,
+            "time": time,
+            "np": np,
+            "print": print,   # サーバーのログに出したい場合はここをラップする
+            "math": __import__("math") # 必要なら他のライブラリも
+        }
+
+        # =========================================================
+        # ここが「自動的な例外処理」の本体です
+        # ユーザーが try-except を書かなくても、ここで全責任を持ちます
+        # =========================================================
+        try:
+            print(">>> User Script Started >>>")
+            
+            # 受信した文字列をそのまま実行
+            # ユーザーコード内でエラーが起きれば、即座にここの except に飛びます
+            exec(code_str, {}, local_scope)
+            
+            print("<<< User Script Finished Normally <<<")
+
+        except KeyboardInterrupt:
+            # stop_program() で強制終了（例外注入）された場合ここに来る
+            print("\n!!! User Script Interrupted by System (Stop Command) !!!")
+
+        except SyntaxError as e:
+            # ユーザーのコードの書き方が間違っている場合
+            print(f"!!! Syntax Error in User Script: line {e.lineno} !!!\n{e}")
+
+        except Exception as e:
+            # ユーザーコード内でゼロ除算や未定義変数などのエラーが起きた場合
+            print(f"!!! Runtime Error in User Script: {e} !!!")
+            # 必要ならスタックトレースを表示
+            import traceback
+            traceback.print_exc()
+
+        finally:
+            # =========================================================
+            # 【重要】どんな終わり方をしても、最後は必ずここを通る
+            # =========================================================
+            print("--- Safety Cleanup: Stopping Motors ---")
+            robot.stop() # ここで確実にモーターを止める
+
+    def check_button(self):
+        """ボタンの状態を確認してプログラムを開始/停止する (タイマー等で呼ぶ)"""
+        try:
+            # ボタンが押されたら (Lowレベルになったら)
+            if lgpio.gpio_read(self.ros_node.h, self.button_pin) == 0:
+                # チャタリング防止の簡易ウェイト
+                time.sleep(0.05)
+                if lgpio.gpio_read(self.ros_node.h, self.button_pin) == 0:
+                    if self.execution_thread and self.execution_thread.is_alive():
+                        self.stop_program()
+                        # ボタンが離されるまで待機（連打防止）
+                        while lgpio.gpio_read(self.ros_node.h, self.button_pin) == 0: time.sleep(0.1)
+                    else:
+                        self.start_program()
+                        while lgpio.gpio_read(self.ros_node.h, self.button_pin) == 0: time.sleep(0.1)
+        except Exception:
+            pass
+
 # --- ROS 2 ノード ---
 class RosSubscriberNode(Node):
     def __init__(self,command_queue):
@@ -417,13 +624,29 @@ def gps_to_dict(gps_msg: NavSatFix):
         'position_covariance_type': gps_msg.position_covariance_type
     }
 
+
+def bme280_to_dict(bme_data: dict):
+    """BME280の読み取り結果を辞書形式に整形する
+    Expecting a dict with keys 'temperature','pressure','humidity' from BME280.read_data()
+    """
+    if not bme_data:
+        return None
+    return {
+        'temperature_celsius': bme_data.get('temperature'),
+        'pressure_hpa': bme_data.get('pressure'),
+        'humidity_percent': bme_data.get('humidity')
+    }
+
 # --- WebSocketクライアント ---
 class RobotWebsocketClient:
-    def __init__(self, ros_node, robot_id="robot01", server_uri="ws://<基地局PCのIPアドレス>:8000/ws/robot/"):
+    def __init__(self, ros_node,script_manager, robot_id="robot03", server_uri="ws://<基地局PCのIPアドレス>:8000/ws/robot/"):
         self.ros_node = ros_node
+        self.script_manager = script_manager
+
         self.uri = f"{server_uri}{robot_id}"
         self.bridge = CvBridge()
         self.ssid, self.strength = get_wifi_info()
+        self.bme280= BME280(bus_number=1, i2c_address=0x76)
         text_lines = []
         text_lines.append(f"id :  {robot_id}")
         text_lines.append("")
@@ -433,6 +656,7 @@ class RobotWebsocketClient:
         else:
             text_lines.append("Wi-Fi Not Connected")
         oled.display_text(text_lines, start_x=5, start_y=5, line_spacing=12)
+
 
     async def run(self):
         async with websockets.connect(self.uri) as websocket:
@@ -453,8 +677,20 @@ class RobotWebsocketClient:
                 command = command_data.get("command")
                 print(f"Received command: {command_data}")
 
-                # --- ここからが変更点 ---
-                if command == "list_log_files":
+                if command == "save_code":
+                    # コードを保存するだけ
+                    code = command_data.get("code")
+                    if code:
+                        self.script_manager.save_code(code)
+                
+                elif command == "start_program":
+                    # 保存されたコードを実行
+                    self.script_manager.start_program()
+
+                elif command == "stop_program":
+                    # 強制停止
+                    self.script_manager.stop_program()
+                elif command == "list_log_files":
                     # ファイル一覧取得コマンドを処理
                     await self.handle_list_log_files(websocket)
 
@@ -465,12 +701,11 @@ class RobotWebsocketClient:
                         await self.handle_get_log_file(websocket, filename)
                     else:
                         print("Error: 'filename' not provided for get_log_file command.")
-                        # エラーをサーバーに通知するのも良いでしょう
+                        # エラーをサーバーに通知する
                         await websocket.send(json.dumps({
                             "type": "error",
                             "message": "'filename' is required for get_log_file."
                         }))
-                
                 else:
                     # 従来通りのコマンドはROSノードのキューに入れる
                     self.ros_node.command_queue.put(command_data)
@@ -513,6 +748,19 @@ class RobotWebsocketClient:
                 }
             if gps_msg:
                 payload["data"]["gps"] = gps_to_dict(gps_msg)
+            # --- BME280 sensor ---
+            try:
+                # read_data() may raise; guard it
+                bme_read = None
+                if hasattr(self, 'bme280') and self.bme280:
+                    bme_read = self.bme280.read_data()
+                if bme_read:
+                    payload["data"]["bme280"] = bme280_to_dict(bme_read)
+                else:
+                    payload["data"]["bme280"] = None
+            except Exception as e:
+                print(f"BME280 read error: {e}")
+                payload["data"]["bme280"] = None
                 
             ssid, strength = get_wifi_info()
             with system_info_lock:
@@ -643,24 +891,34 @@ def run_ros_spin(node):
 
 # --- メイン処理 ---
 if __name__ == "__main__":
-    # 変更点 1: プロセスの開始時点でROSを一度だけ初期化する
     rclpy.init()
 
     command_queue = queue.Queue()
-    # 変更点 2: ROSノードのインスタンスをメインスレッドで生成する
     ros_node = RosSubscriberNode(command_queue)
     
-    # 変更点 3: ROSのspinを実行するスレッドを開始する
-    #           生成したノードのインスタンスを渡す
+    script_manager = ScriptManager(ros_node)
+
+    #ボタン監視用のループ関数
+    def button_watcher():
+        while True:
+            script_manager.check_button()
+            time.sleep(0.1)
+
+    # ボタン監視スレッドを開始
+    button_thread = threading.Thread(target=button_watcher, daemon=True)
+    button_thread.start()
+    # ROSのspinを実行するスレッドを開始する
+    # 生成したノードのインスタンスを渡す
     ros_thread = threading.Thread(target=run_ros_spin, args=(ros_node,), daemon=True)
     ros_thread.start()
 
-    # 変更点 4: WebSocketクライアントにも同じノードのインスタンスを渡す
-    #           (主にコマンドキューを共有するために)
-    #           IPアドレスは実際の基地局PCのものに変更してください
+    # WebSocketクライアントにも同じノードのインスタンスを渡す
+    #(主にコマンドキューを共有するために)
     client = RobotWebsocketClient(
         ros_node=ros_node, 
-        server_uri="ws://192.168.137.1:8000/ws/robot/"
+        script_manager=script_manager,
+        robot_id="robot3",
+        server_uri="ws://192.168.11.14:8000/ws/robot/"
         #server_uri="wss://ekagaku-robot.onrender.com/ws/robot/1"
     )
 
@@ -678,5 +936,15 @@ if __name__ == "__main__":
         rclpy.shutdown()
         # ros_threadが終了するのを待つ
         ros_thread.join(timeout=2)
+        # Close BME280 sensor if client was created and sensor is open
+        try:
+            if 'client' in locals() and hasattr(client, 'bme280') and client.bme280:
+                try:
+                    client.bme280.close()
+                except Exception as e:
+                    print(f"Error closing BME280: {e}")
+        except Exception:
+            pass
+
         oled.clear()
         print("Application has exited.")
