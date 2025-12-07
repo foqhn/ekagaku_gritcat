@@ -417,7 +417,7 @@ typings/
 
 #WebStorm
 .idea/
-.my-robot-controller/node_modules/
+
 
 
 # Optional npm cache directory

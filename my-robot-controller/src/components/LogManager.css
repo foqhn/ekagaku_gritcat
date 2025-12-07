@@ -1,0 +1,66 @@
+.log-manager {
+    background-color: #1e293b;
+    padding: 16px;
+    border-radius: 12px;
+    color: #e2e8f0;
+    margin-top: 16px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.log-manager h3 {
+    margin-top: 0;
+    margin-bottom: 12px;
+    font-size: 1.1rem;
+    color: #94a3b8;
+    border-bottom: 1px solid #334155;
+    padding-bottom: 8px;
+}
+
+.log-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.file-select {
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px solid #475569;
+    background-color: #0f172a;
+    color: #e2e8f0;
+    font-size: 0.9rem;
+}
+
+.btn-reload,
+.btn-download {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.btn-reload {
+    background-color: #475569;
+    color: white;
+}
+
+.btn-reload:hover {
+    background-color: #64748b;
+}
+
+.btn-download {
+    background-color: #22c55e;
+    color: white;
+}
+
+.btn-download:hover {
+    background-color: #16a34a;
+}
+
+.btn-download:disabled {
+    background-color: #334155;
+    color: #94a3b8;
+    cursor: not-allowed;
+}
