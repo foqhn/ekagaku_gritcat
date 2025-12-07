@@ -1,160 +1,341 @@
 /* App.css */
 
-/* #rootの幅制限を解除 */
 #root {
   text-align: center;
   max-width: none;
-  background-color: #282c34;
+  background-color: #0f172a;
+  /* Slate 900 */
   min-height: 100vh;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
-}
+/* --- Layout --- */
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
-}
-
-.card {
-  padding: 2em;
-}
-
-.read-the-docs {
-  color: #888;
-}
-
-/* --- ここから下がレイアウトの核となる部分です --- */
-
-/* Sidebar / tools */
 .app-root {
-  display: flex; /* Flexboxコンテナとして定義 */
-  width: 100vw;  /* 画面の幅いっぱいに設定 */
-  height: 100vh; /* 画面の高さいっぱいに設定 */
-  background: #0f1720;
-  color: #eee;
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  background: #0f172a;
+  color: #e2e8f0;
+  overflow: hidden;
 }
 
+/* Sidebar */
 .sidebar {
-  flex: 0;
-  width: 120px;
-  flex-shrink: 0;
-  background: linear-gradient(180deg, #0b1220, #0f1826);
+  flex: 0 0 80px;
+  /* Narrower sidebar */
+  background: #1e293b;
+  /* Slate 800 */
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 12px 6px;
-  gap: 10px;
-  border-right: 1px solid rgba(255, 255, 255, 0.04);
+  padding: 16px 0;
+  gap: 16px;
+  border-right: 1px solid #334155;
+  /* Slate 700 */
+  z-index: 10;
 }
 
 .tool-btn {
-  width: 100px;
-  height: 100px;
-  border-radius: 10px;
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
   background: transparent;
-  color: #bfc7d6;
+  color: #94a3b8;
+  /* Slate 400 */
   border: none;
-  font-size: 50px;
-  display: inline-flex;
+  font-size: 28px;
+  display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
   cursor: pointer;
+  transition: all 0.2s ease;
 }
-.tool-btn:hover { background: rgba(255, 255, 255, 0.02); color: #fff; }
-.tool-btn.active { background: linear-gradient(180deg, #1f2937, #111827); color: #fff; box-shadow: 0 6px 18px rgba(0,0,0,0.6); }
 
-/* simple tooltip */
+.tool-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f8fafc;
+}
+
+.tool-btn.active {
+  background: #3b82f6;
+  /* Blue 500 */
+  color: #ffffff;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+/* Tooltip */
 .tooltip {
   position: absolute;
-  left: 80px;
+  left: 70px;
   top: 50%;
   transform: translateY(-50%);
-  background: rgba(10, 12, 16, 0.95);
-  color: #e6eef8;
-  padding: 6px 10px;
+  background: #1e293b;
+  color: #f1f5f9;
+  padding: 6px 12px;
   border-radius: 6px;
   white-space: nowrap;
-  font-size: 20px;
+  font-size: 14px;
+  font-weight: 500;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.12s ease, transform 0.12s ease;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  border: 1px solid #334155;
+  z-index: 20;
 }
-.tool-btn:hover .tooltip { opacity: 1; transform: translateY(-50%) translateX(4px); }
 
-/* main area tweaks */
+.tool-btn:hover .tooltip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(4px);
+}
+
+/* Main Area */
 .main-area {
   flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: flex-start;  
-  background-color: #1b1b1b;
-  min-width: 0; /* コンテンツによるレイアウト崩れを防ぐ */
-  overflow: auto; /* コンテンツがはみ出た場合にスクロールさせる */
+  background-color: #0f172a;
+  overflow: hidden;
+  position: relative;
 }
 
 .main-area h2 {
-  margin-top: 0;
-  color: #a0a0a0;
-  text-align: left; /* ← App.cssの#rootから継承されていた中央寄せを解除 */
+  margin-bottom: 16px;
+  color: #f8fafc;
+  font-size: 1.5rem;
+  font-weight: 600;
+  text-align: left;
+  padding: 0 4px;
 }
-.robot-ctl{
+
+.main-area section {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+/* Robot Control Layout */
+.robot-ctl {
   flex: 1;
   display: flex;
   flex-direction: row;
+  gap: 24px;
   height: 100%;
+  overflow: hidden;
 }
-.programming{
-  flex:1;
+
+.programming {
+  flex: 2;
   display: flex;
   flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  /* Prevent flex overflow */
 }
-.prog-menu{
-  flex:1;
-  background-color: #1f2937;
+
+.prog-menu {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  background-color: #1e293b;
+  border-radius: 12px;
+  border: 1px solid #334155;
+  align-items: center;
 }
-.prog-editzone{
-  flex: 8;
-  background-color: #111827;
-  padding: 24px;
-  border-radius: 20px;
+
+.prog-editzone {
+  flex: 1;
+  background-color: #1e293b;
+  padding: 4px;
+  /* Minimal padding for blockly */
+  border-radius: 12px;
+  border: 1px solid #334155;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .robot-info {
-  flex:1;
-  background-color: #5e5e5e;
-  padding: 20px;
+  flex: 1;
+  background-color: #1e293b;
+  padding: 24px;
+  border-radius: 12px;
+  border: 1px solid #334155;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 400px;
+}
+
+.connection-instructions p {
+  color: #94a3b8;
+  margin-top: 0;
+}
+
+textarea {
+  background-color: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #334155;
   border-radius: 8px;
+  padding: 12px;
+  font-family: 'Fira Code', monospace;
+  font-size: 14px;
+  resize: none;
 }
 
-.console-window{
-  flex:1;
+textarea:focus {
+  outline: 2px solid #3b82f6;
+  border-color: transparent;
+}
+
+/* Blockly Toolbox Overrides */
+.blocklyToolbox {
+  background-color: #484848 !important;
+  /* Light gray background for contrast */
+  color: #fefefe !important;
+  /* Dark text */
+  border-right: 1px solid #303030;
+}
+
+.blocklyToolboxDiv {
+  background-color: #484848 !important;
+}
+
+.blocklyTreeLabel {
+  color: #0f172a !important;
+  /* Ensure text is dark */
+  font-family: 'Inter', sans-serif;
+  font-weight: 500;
+}
+
+.blocklyFlyoutBackground {
+  fill: #f8fafc !important;
+  /* Light background for flyout */
+}
+
+.blocklyTreeRow:hover {
+  background-color: #363636 !important;
+}
+
+.blocklyTreeSelected .blocklyTreeLabel {
+  color: #2563eb !important;
+  /* Blue text for selected */
+}
+
+/* Panel Container */
+.panel-container {
+  background-color: #1e293b;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+/* Sensor Data Container */
+.sensor-data-container {
+  font-size: 0.8rem;
+  max-height: 400px;
+  /* Adjust height as needed */
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+/* Custom Scrollbar for Sensor Data */
+.sensor-data-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sensor-data-container::-webkit-scrollbar-track {
+  background: rgba(30, 41, 59, 0.5);
+}
+
+.sensor-data-container::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 3px;
+}
+
+.sensor-data-container::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+.sensor-card {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.sensor-title {
+  font-size: 1rem;
+  margin-top: 0;
+  margin-bottom: 8px;
+  color: #94a3b8;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 4px;
+}
+
+.sensor-subtitle {
+  font-size: 0.9rem;
+  color: #cbd5e1;
+  margin: 8px 0 4px 0;
+}
+
+.sensor-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.75rem;
+}
+
+.sensor-key {
+  color: #94a3b8;
+  padding: 2px 8px 2px 0;
+  width: 40%;
+}
+
+.sensor-value {
+  color: #22c55e;
+  text-align: right;
+}
+
+.sensor-pre {
+  font-family: 'Fira Code', monospace;
+  font-size: 0.75rem;
+  color: #22c55e;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Console Window */
+.console-window {
+  height: 120px;
   background-color: #000000;
+  border-top: 1px solid #334155;
+  padding: 8px 12px;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.9em;
+  color: #22c55e;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column-reverse;
 }
 
+.log-entry {
+  margin-bottom: 2px;
+}
 
-/* sectionやdivのテキストも左寄せに戻す */
-/* .main-area section, .main-area div {
-  text-align: left;
-} */
+.log-info {
+  color: #22c55e;
+}
+
+.log-error {
+  color: #ef4444;
+}
+
+.log-success {
+  color: #4ade80;
+}
