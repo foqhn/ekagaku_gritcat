@@ -48,6 +48,29 @@ command_queue = queue.Queue()
 shutdown_event = threading.Event() 
 oled=OLEDDisplay(font_size=15)
 
+CURRENT_ROBOT_ID = "robot03" 
+
+def show_status_display():
+    """待機画面（IDとWi-Fi情報）を表示する関数"""
+    try:
+        oled.clear()
+        ssid, strength = get_wifi_info()
+        
+        text_lines = []
+        text_lines.append(f"ID : {CURRENT_ROBOT_ID}")
+        text_lines.append("") # 空行
+        
+        if ssid:
+            # 文字数が多い場合に備えて調整（必要なら）
+            text_lines.append(f"Wi-Fi: {ssid[:12]}") 
+            text_lines.append(f"Signal: {strength}%")
+        else:
+            text_lines.append("Wi-Fi: Disconnected")
+            
+        oled.display_text(text_lines, start_x=0, start_y=0, line_spacing=12)
+    except Exception as e:
+        print(f"OLED Error: {e}")
+
 def raise_keyboard_interrupt(thread_obj):
     """
     指定したスレッド内部で強制的に KeyboardInterrupt を発生させる
@@ -96,11 +119,141 @@ class RobotController:
             time.sleep(0.1) # 0.1秒ごとに停止チェック
 
     # センサー取得などは以前と同じ
-    def get_imu(self):
-        self._check_stop()
-        with imu_lock:
-            return imu_to_dict(latest_imu_msg)
+    def get_sensor(self, sensor_type):
+        """
+        Blocklyからの要求に応じてセンサー値を辞書形式で返す。
+        データがない場合は、スクリプトが停止しないようにオール0の辞書を返す。
+        """
+        self._check_stop()  # 実行停止チェック
+
+        # --- IMU (加速度・ジャイロ・方位) ---
+        if sensor_type == 'imu':
+            data = None
+            with imu_lock:
+                if latest_imu_msg:
+                    data = imu_to_dict(latest_imu_msg)
             
+            # データがある場合は返す
+            if data:
+                return data
+            
+            # データがない場合のデフォルト構造 (Blocklyのアクセスキーに合わせて作成)
+            return {
+                'linear_acceleration': {'x': 0.0, 'y': 0.0, 'z': 0.0},
+                'angular_velocity': {'x': 0.0, 'y': 0.0, 'z': 0.0},
+                'orientation': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}
+            }
+
+        # --- Magnetic Field (磁気) ---
+        elif sensor_type == 'mag':
+            data = None
+            with imu_lock: # 変数定義に合わせて適切なロックを使用
+                msg = latest_mag_msg
+                if msg:
+                    data = {
+                        'magnetic_field': {
+                            'x': msg.magnetic_field.x,
+                            'y': msg.magnetic_field.y,
+                            'z': msg.magnetic_field.z
+                        }
+                    }
+            if data:
+                return data
+            return {'magnetic_field': {'x': 0.0, 'y': 0.0, 'z': 0.0}}
+
+        # --- GPS ---
+        elif sensor_type == 'gps':
+            data = None
+            with gps_lock:
+                if latest_gps_msg:
+                    data = gps_to_dict(latest_gps_msg)
+            
+            if data:
+                return data
+            return {
+                'latitude': 0.0, 
+                'longitude': 0.0, 
+                'altitude': 0.0,
+                'status': {'status': 0}
+            }
+
+        # --- BME280 (温度・湿度・気圧) ---
+        elif sensor_type == 'bme280':
+            # リアルタイム性を重視してその場で読むか、
+            # もしくはRobotWebsocketClientが定期更新しているグローバル変数があればそれを使う
+            # ここでは安全のため、その場で読む（エラー時は0）実装例
+            try:
+                # 注意: I2Cの競合を避けるため、メインループ側で定期取得した値を使うのがベストですが
+                # 簡易的に都度読み込みを行います。
+                # すでにインスタンスがある場合はそれを使い回す設計が望ましいです。
+                temp_bme = BME280(bus_number=1, i2c_address=0x76)
+                bme_data = temp_bme.read_data()
+                temp_bme.close() # リソース解放
+                
+                if bme_data:
+                    return {
+                        'temperature_celsius': bme_data.get('temperature', 0.0),
+                        'humidity_percent': bme_data.get('humidity', 0.0),
+                        'pressure_hpa': bme_data.get('pressure', 0.0)
+                    }
+            except Exception as e:
+                # 読み込み失敗時
+                pass
+                
+            return {
+                'temperature_celsius': 0.0,
+                'humidity_percent': 0.0,
+                'pressure_hpa': 0.0
+            }
+
+        # --- Wi-Fi ---
+        elif sensor_type == 'wifi':
+            ssid, rssi = get_wifi_info()
+            # Blockly側は 'rssi' キーを期待しているため合わせる
+            if rssi is None: rssi = 0
+            return {'rssi': rssi, 'ssid': ssid}
+
+        # --- Battery (実装例) ---
+        elif sensor_type == 'battery':
+            # 現状のコードにバッテリー取得ロジックがないためダミーを返却
+            # 将来的にADCなどを実装したらここを書き換える
+            return {'voltage': 0.0}
+
+        # --- Unknown Sensor ---
+        else:
+            self.print(f"Warning: Unknown sensor type '{sensor_type}'")
+            return {}
+
+
+    def print_display(self, message):
+        """
+        ユーザープログラムからOLEDに任意の文字や数値を表示する。
+        改行コード (\n) を含めると複数行で表示される。
+        """
+        self._check_stop() # 停止シグナルを確認
+
+        try:
+            # 入力がリスト（複数行）の場合と、単一の値（文字列・数値）の場合を吸収
+            lines = []
+            if isinstance(message, list):
+                # リストなら各要素を文字列化
+                lines = [str(x) for x in message]
+            else:
+                # 文字列なら改行コードで分割
+                lines = str(message).split('\n')
+
+            # グローバル変数のoledを使って表示
+            # ユーザーが見やすいように画面をクリアしてから表示
+            oled.clear()
+            
+            # 行間(line_spacing)はフォントサイズに合わせて調整（例: 15px）
+            oled.display_text(lines, start_x=0, start_y=0, line_spacing=15)
+
+        except Exception as e:
+            # 表示のエラーでプログラム自体を止めるのはもったいないのでログのみ
+            print(f"[OLED Error]: {e}")
+
+
     def print(self, text):
         print(f"[Robot]: {text}")
 
@@ -198,16 +351,13 @@ class ScriptManager:
             "print": print,   # サーバーのログに出したい場合はここをラップする
             "math": __import__("math") # 必要なら他のライブラリも
         }
-
-        # =========================================================
-        # ここが「自動的な例外処理」の本体です
-        # ユーザーが try-except を書かなくても、ここで全責任を持ちます
-        # =========================================================
         try:
             print(">>> User Script Started >>>")
-            
-            # 受信した文字列をそのまま実行
-            # ユーザーコード内でエラーが起きれば、即座にここの except に飛びます
+            oled.clear()
+            oled.display_text(
+                ["", "   Program", "   Running...", ""], 
+                start_x=5, start_y=5, line_spacing=15
+            )
             exec(code_str, {}, local_scope)
             
             print("<<< User Script Finished Normally <<<")
@@ -215,6 +365,9 @@ class ScriptManager:
         except KeyboardInterrupt:
             # stop_program() で強制終了（例外注入）された場合ここに来る
             print("\n!!! User Script Interrupted by System (Stop Command) !!!")
+            oled.clear()
+            oled.display_text(["", "   STOPPED", "", ""], start_x=5, start_y=5)
+            time.sleep(1.0) 
 
         except SyntaxError as e:
             # ユーザーのコードの書き方が間違っている場合
@@ -233,6 +386,7 @@ class ScriptManager:
             # =========================================================
             print("--- Safety Cleanup: Stopping Motors ---")
             robot.stop() # ここで確実にモーターを止める
+            show_status_display()
 
     def check_button(self):
         """ボタンの状態を確認してプログラムを開始/停止する (タイマー等で呼ぶ)"""
@@ -464,7 +618,9 @@ class RosSubscriberNode(Node):
                     "lin_accel_x", "lin_accel_y", "lin_accel_z",
                     "mag_x", "mag_y", "mag_z",
                     "gps_status", "latitude", "longitude", "altitude",
-                    "temperature_celsius", 
+                    "temperature_celsius",
+                    "pressure_hpa",
+                    "humidity_percent",
                     "wifi_ssid", "wifi_signal_strength"
                 ]
                 self.csv_writer.writerow(header)
@@ -535,6 +691,15 @@ class RosSubscriberNode(Node):
             row.extend([gps_msg.status.status, gps_msg.latitude, gps_msg.longitude, gps_msg.altitude])
         else:
             row.extend([None, None, None, None])
+        # BME280データの追加
+        try:
+            bme280 = BME280(bus_number=1, i2c_address=0x76)
+            bme_data = bme280.read_data()
+            row.append(bme_data.get('temperature'))
+            row.append(bme_data.get('pressure'))
+            row.append(bme_data.get('humidity'))
+        except Exception:
+            row.extend([None, None, None])
         row.append(system_info.get('wifi_ssid'))
         row.append(system_info.get('wifi_strength'))
         self.csv_writer.writerow(row)
@@ -646,6 +811,12 @@ class RobotWebsocketClient:
         self.uri = f"{server_uri}{robot_id}"
         self.bridge = CvBridge()
         self.ssid, self.strength = get_wifi_info()
+
+        global CURRENT_ROBOT_ID
+        CURRENT_ROBOT_ID = robot_id
+
+        show_status_display()
+
         self.bme280= BME280(bus_number=1, i2c_address=0x76)
         text_lines = []
         text_lines.append(f"id :  {robot_id}")
@@ -917,7 +1088,7 @@ if __name__ == "__main__":
     client = RobotWebsocketClient(
         ros_node=ros_node, 
         script_manager=script_manager,
-        robot_id="robot3",
+        robot_id="robot03",
         server_uri="ws://192.168.11.14:8000/ws/robot/"
         #server_uri="wss://ekagaku-robot.onrender.com/ws/robot/1"
     )
