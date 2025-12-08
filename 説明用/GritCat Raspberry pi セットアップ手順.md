@@ -118,18 +118,17 @@
 	```
 	5. rosdepのセットアップ
 	```bash
-   cd ./ekagaku_gritcat/grit_ws/
-   sudo rosdep init
-   rosdep update
-
+    cd ./ekagaku_gritcat/grit_ws/
+    sudo rosdep init
+    rosdep update
 	```
 	6. bno055(IMU)のパッケージをダウンロード
 	```bash
-   cd ~/ekagaku_gritcat/grit_ws/src
-   git clone https://github.com/flynneva/bno055.git
-   cd ..
-   colcon build
-   source ~/.bashrc
+    cd ~/ekagaku_gritcat/grit_ws/src
+    git clone https://github.com/flynneva/bno055.git
+    cd ..
+    colcon build
+    source ~/.bashrc
 	```
 	7. bno055のパッケージを少し書き換える
 		1. bno055/launch/bno055.launch.pyを編集
