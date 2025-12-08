@@ -215,4 +215,4 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 grit_ws/src/bno055/
-grit_ws/install/
+.install/
