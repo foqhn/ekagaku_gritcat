@@ -143,16 +143,16 @@
 	```
 	以下のように編集
 	```sh
-# Default settings for the gpsd init script and the hotplug wrapper.
-# Start the gpsd daemon automatically at boot time
-START_DAEMON="true"
-# Use USB hotplugging to add new USB devices automatically to the daemon
-USBAUTO="true"
-# Devices gpsd should collect to at boot time.
-# They need to be read/writeable, either by user gpsd or the group dialout.
-DEVICES="/dev/ttyUSB0"
-# Other options you want to pass to gpsd
-GPSD_OPTIONS="-F /var/run/gpsd.sock -b -n -r"
+	# Default settings for the gpsd init script and the hotplug wrapper.
+	# Start the gpsd daemon automatically at boot time
+	START_DAEMON="true"
+	# Use USB hotplugging to add new USB devices automatically to the daemon
+	USBAUTO="true"
+	# Devices gpsd should collect to at boot time.
+	# They need to be read/writeable, either by user gpsd or the group dialout.
+	DEVICES="/dev/ttyUSB0"
+	# Other options you want to pass to gpsd
+	GPSD_OPTIONS="-F /var/run/gpsd.sock -b -n -r"
 	```
 	9. 
 8. スタートアップ設定
@@ -162,39 +162,39 @@ sudo nano /etc/systemd/system/gritcat-system.service
 	```
 	内容を以下のように編集
 	```bash
-[Unit]
-# サービスの説明
-Description=My Robot System Service
-# ネットワークがオンラインになってから起動する
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-
-User=gritcat
-# 実行するグループを指定 (通常はユーザーと同じ)
-Group=gritcat
-
-# スクリプトがあるディレクトリの絶対パスを指定
-# '~' は使えないため、/home/ユーザー名 のようにフルパスで記述
-WorkingDirectory=/home/gritcat/ekagaku_gritcat
-
-# 実行するコマンドを絶対パスで指定
-ExecStart=/home/gritcat/ekagaku_gritcat/app/run_system.sh
-
-
-# エラーなどでプロセスが終了した場合、10秒後に自動で再起動する
-Restart=on-failure
-RestartSec=10
-
-# 標準出力をjournaldに送る
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=my-robot
-
-[Install]
-# システム起動時に自動起動するように設定
-WantedBy=multi-user.target
+	[Unit]
+	# サービスの説明
+	Description=My Robot System Service
+	# ネットワークがオンラインになってから起動する
+	After=network-online.target
+	Wants=network-online.target
+	
+	[Service]
+	
+	User=gritcat
+	# 実行するグループを指定 (通常はユーザーと同じ)
+	Group=gritcat
+	
+	# スクリプトがあるディレクトリの絶対パスを指定
+	# '~' は使えないため、/home/ユーザー名 のようにフルパスで記述
+	WorkingDirectory=/home/gritcat/ekagaku_gritcat
+	
+	# 実行するコマンドを絶対パスで指定
+	ExecStart=/home/gritcat/ekagaku_gritcat/app/run_system.sh
+	
+	
+	# エラーなどでプロセスが終了した場合、10秒後に自動で再起動する
+	Restart=on-failure
+	RestartSec=10
+	
+	# 標準出力をjournaldに送る
+	StandardOutput=journal
+	StandardError=journal
+	SyslogIdentifier=my-robot
+	
+	[Install]
+	# システム起動時に自動起動するように設定
+	WantedBy=multi-user.target
 ```
 	2. サービスの有効化
 	```bash
