@@ -2,7 +2,7 @@ import React from 'react';
 import './SensorControls.css';
 
 const SensorControls = ({ onToggleSensor, onToggleLog, sensorStates }) => {
-    const { cam = false, imu = false, gps = false, tempe = false } = sensorStates || {};
+    const { cam = false, imu = false, gps = false, bme = false } = sensorStates || {};
     return (
         <div className="sensor-controls">
             <h3>Sensor Controls</h3>
@@ -41,12 +41,12 @@ const SensorControls = ({ onToggleSensor, onToggleLog, sensorStates }) => {
                     </label>
                 </div>
                 <div className="control-item">
-                    <span>Temperature</span>
+                    <span>Environment</span>
                     <label className="toggle-switch">
                         <input
                             type="checkbox"
-                            checked={tempe}
-                            onChange={(e) => onToggleSensor('tempe', e.target.checked)}
+                            checked={bme}
+                            onChange={(e) => onToggleSensor('bme', e.target.checked)}
                         />
                         <span className="slider round"></span>
                     </label>

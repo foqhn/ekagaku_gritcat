@@ -26,13 +26,14 @@ function App() {
   const [magData, setMagData] = useState('Connecting...');
   const [wifiData, setWifiData] = useState('Connecting...');
   const [gpsData, setGpsData] = useState('Connecting...');
+  const [bmeData, setBmeData] = useState('Connecting...');
 
   // Sensor ON/OFF tracking (optimistic UI)
-  const [sensorStates, setSensorStates] = useState({ cam: false, imu: false, gps: false, tempe: false });
+  const [sensorStates, setSensorStates] = useState({ cam: false, imu: false, gps: false, bme: false });
 
   // Tracks if user manually turned OFF a sensor to prevent auto-on
   // Using useRef to avoid stale closure issues in ws.onmessage
-  const manualOverrideRef = useRef({ cam: false, imu: false, gps: false, tempe: false });
+  const manualOverrideRef = useRef({ cam: false, imu: false, gps: false, bme: false });
 
   // Ref to store timeout IDs for each sensor to reset state after inactivity
   const timersRef = useRef({});
@@ -54,13 +55,14 @@ function App() {
 
   // Block editor generated code
   const [generatedCode, setGeneratedCode] = useState('');
+  const [blocklyState, setBlocklyState] = useState(null);
 
   // Periodically fetch robot list
   useEffect(() => {
     const fetchRobotList = async () => {
       try {
         // User requested to use the remote base URL directly
-        const resp = await fetch('https://ekagaku-robot.onrender.com/api/robots');
+        const resp = await fetch('http://192.168.11.14:8000/api/robots');
         if (!resp.ok) {
           throw new Error(`API Error: ${resp.status}`);
         }
@@ -127,6 +129,9 @@ function App() {
             if (data.gps) {
               handleSensorUpdate('gps', () => setGpsData(JSON.stringify(data.gps, null, 2)));
             }
+            if (data.bme280) {
+              handleSensorUpdate('bme', () => setBmeData(JSON.stringify(data.bme280, null, 2)));
+            }
           } else if (payload.type === 'log_file_list' && payload.files) {
             setLogFiles(payload.files);
           } else if (payload.type === 'log_file_content' && payload.filename && payload.data) {
@@ -164,7 +169,8 @@ function App() {
     } else {
       if (!selectedRobot) return;
       // User requested to use the remote base URL directly
-      const url = `wss://ekagaku-robot.onrender.com/ws/frontend/${selectedRobot}`;
+      //const url = `wss://ekagaku-robot.onrender.com/ws/frontend/${selectedRobot}`;//リモート
+      const url = `ws://192.168.11.14:8000/ws/frontend/${selectedRobot}`;//ローカル
       const newWs = new WebSocket(url);
       setConnectionStatus('Connecting...');
       newWs.onopen = () => {
@@ -259,6 +265,33 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
+  const handleSaveCode = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ command: 'save_code', code: generatedCode }));
+      addLog('Program saved to robot.', 'success');
+    } else {
+      alert('Not connected to robot.');
+    }
+  };
+
+  const handleRunProgram = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ command: 'start_program' }));
+      addLog('Program started.', 'success');
+    } else {
+      alert('Not connected to robot.');
+    }
+  };
+
+  const handleStopProgram = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ command: 'stop_program' }));
+      addLog('Program stopped.', 'warning');
+    } else {
+      alert('Not connected to robot.');
+    }
+  };
+
   // UI rendering
   return (
     <div className="app-root">
@@ -299,19 +332,26 @@ function App() {
               <div className="robot-ctl">
                 <div className="programming">
                   <div className="prog-menu">
-                    <button onClick={() => console.log('Write Program clicked')} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button onClick={handleSaveCode} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span>💾</span> 書き込み
                     </button>
                     <button onClick={handleSavePython} style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#3b82f6', color: '#fff' }}>
                       <span>🐍</span> Python保存
                     </button>
-                    <button onClick={() => console.log('Run Program clicked')} style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#22c55e', color: '#fff' }}>
+                    <button onClick={handleRunProgram} style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#22c55e', color: '#fff' }}>
                       <span>▶</span> 実行
+                    </button>
+                    <button onClick={handleStopProgram} style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#ef4444', color: '#fff' }}>
+                      <span>⏹</span> 停止
                     </button>
                   </div>
                   <div className="prog-editzone">
                     <div style={{ flex: 1, position: 'relative' }}>
-                      <BlockEditor onCodeChange={setGeneratedCode} />
+                      <BlockEditor
+                        onCodeChange={setGeneratedCode}
+                        initialState={blocklyState}
+                        onStateChange={setBlocklyState}
+                      />
                     </div>
                     <div style={{ height: '120px', marginTop: '12px', display: 'flex', flexDirection: 'column' }}>
                       <h3 style={{ fontSize: '14px', marginBottom: '8px', color: '#94a3b8' }}>Generated Python Code</h3>
@@ -391,7 +431,7 @@ function App() {
                     onDownload={handleDownloadLog}
                   />
                   <div className="panel-container">
-                    <SensorData imu={imuData} mag={magData} wifi={wifiData} gps={gpsData} />
+                    <SensorData imu={imuData} mag={magData} wifi={wifiData} gps={gpsData} bme={bmeData} />
                   </div>
                 </div>
               </div>

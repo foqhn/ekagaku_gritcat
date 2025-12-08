@@ -3,9 +3,18 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, List
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # HTMLテンプレートを読み込む設定
 app.mount("/static", StaticFiles(directory="static"), name="static") # この行を追加
@@ -89,4 +98,4 @@ async def websocket_frontend_endpoint(websocket: WebSocket, robot_id: str):
 if __name__ == "__main__":
     import uvicorn
     # 基地局PCのIPアドレス(192.168.137.1)で待ち受ける
-    uvicorn.run(app, host="192.168.137.1", port=8000)
+    uvicorn.run(app, host="192.168.11.14", port=8000)
