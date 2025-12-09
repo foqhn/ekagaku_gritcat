@@ -11,33 +11,33 @@
 	https://www.raspberrypi.com/software/
 	このドキュメントではVer2.0.0を持ちいます．
 2. Imagerを使いOSを焼きこむ
-	1. ハードの選択//
+	1. ハードの選択<br>
 	   ![](images/Pasted%20image%2020251127174110.png)
 	3. OSの選択
-	   Ubuntu22.04のServerを選択する．
+	   Ubuntu22.04のServerを選択する．<br>
 	   ![](images/Pasted%20image%2020251127174319.png)
 	   ![](images/Pasted%20image%2020251127174338.png)
 	   ![](images/Pasted%20image%2020251127174411.png)
-	4. SDカードが差し込まれていれば，OSを焼きこむSDカードが項目に現れるので，それを選択
+	4. SDカードが差し込まれていれば，OSを焼きこむSDカードが項目に現れるので，それを選択<br>
 	   ![](images/Pasted%20image%2020251127174431.png)
 	   デバイス名を記入．
 	   デバイス名に混合が発生するとエラーが起こるため，被りがないようにする．
-	   （ロボットリストを参考に名前を付ける）
-	   ![](images/Pasted%20image%2020251127174514.png)
+	   （ロボットリストを参考に名前を付ける）<br>
+	   ![](images/Pasted%20image%2020251127174514.png)<br>
 	   ユーザー名は「gritcat」で統一
 	   パスワードは「ekagaku」で統一
-	   ![](images/Pasted%20image%2020251127174629.png)
+	   ![](images/Pasted%20image%2020251127174629.png)<br>
 	5. SSHの有効化のトグルを必ずONに
-	   認証方法はパスワードでOK
+	   認証方法はパスワードでOK<br>
 	   ![](images/Pasted%20image%2020251127174752.png)
 	  完了したら書き込み開始
 
 3. PCについているLANポートのアドレスを変更
 	1. コントロールパネル⇒ネットワークとインターネット⇒ネットワークと共有センター⇒アダプター設定の変更⇒Raspberrypiを接続する予定のイーサネットポートを右クリック⇒プロパティ⇒インターネットプロトコルバージョン4
-	2. 以下のように記入
+	2. 以下のように記入<br>
 	   ![](images/Pasted%20image%2020251127200438.png)
 	3. OK⇒閉じるを押す
-	4. コマンドプロンプトで「ipconfig」 アドレスが設定したとおりになっているか確認
+	4. コマンドプロンプトで「ipconfig」 アドレスが設定したとおりになっているか確認<br>
 	   ![](images/Pasted%20image%2020251127200619.png)
 4. Raspberry piを起動
 	1. USBケーブルを差し，Raspberry piを起動
@@ -45,7 +45,7 @@
 	```bash
 	ping "ロボットの名前".local
 	```
-	以下のような表示があり，応答が確認できればOK
+	以下のような表示があり，応答が確認できればOK<br>
 	![](images/Pasted%20image%2020251203210633.png)
 	3. 
 5. SSH接続
@@ -53,7 +53,7 @@
 	```bash
 	ssh gritcat@"ロボットの名前".local
 	```
-	以下のようにユーザー名が表示されればOK
+	以下のようにユーザー名が表示されればOK<br>
 	![](images/Pasted%20image%2020251203212021.png)
 	2. ネットプランを追加し，イーサネットに固定IPを与える
 	```
