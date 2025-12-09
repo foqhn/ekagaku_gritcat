@@ -19,7 +19,7 @@
 	   ![](images/Pasted%20image%2020251127174338.png)
 	   ![](images/Pasted%20image%2020251127174411.png)
 	4. SDカードが差し込まれていれば，OSを焼きこむSDカードが項目に現れるので，それを選択<br>
-	   ![](images/Pasted%20image%2020251127174431.png)
+	   ![](images/Pasted%20image%2020251127174431.png)<br>
 	   デバイス名を記入．
 	   デバイス名に混合が発生するとエラーが起こるため，被りがないようにする．
 	   （ロボットリストを参考に名前を付ける）<br>
@@ -29,16 +29,16 @@
 	   ![](images/Pasted%20image%2020251127174629.png)<br>
 	5. SSHの有効化のトグルを必ずONに
 	   認証方法はパスワードでOK<br>
-	   ![](images/Pasted%20image%2020251127174752.png)
+	   ![](images/Pasted%20image%2020251127174752.png)<br>
 	  完了したら書き込み開始
 
 3. PCについているLANポートのアドレスを変更
 	1. コントロールパネル⇒ネットワークとインターネット⇒ネットワークと共有センター⇒アダプター設定の変更⇒Raspberrypiを接続する予定のイーサネットポートを右クリック⇒プロパティ⇒インターネットプロトコルバージョン4
 	2. 以下のように記入<br>
-	   ![](images/Pasted%20image%2020251127200438.png)
+	   ![](images/Pasted%20image%2020251127200438.png)<br>
 	3. OK⇒閉じるを押す
 	4. コマンドプロンプトで「ipconfig」 アドレスが設定したとおりになっているか確認<br>
-	   ![](images/Pasted%20image%2020251127200619.png)
+	   ![](images/Pasted%20image%2020251127200619.png)<br>
 4. Raspberry piを起動
 	1. USBケーブルを差し，Raspberry piを起動
 	2. Raspberry piにPing（ノック）が通るか確認
@@ -46,7 +46,7 @@
 	ping "ロボットの名前".local
 	```
 	以下のような表示があり，応答が確認できればOK<br>
-	![](images/Pasted%20image%2020251203210633.png)
+	![](images/Pasted%20image%2020251203210633.png)<br>
 	3. 
 5. SSH接続
 	1. 先ほどのホスト名にダイレクトにSSH接続
@@ -54,7 +54,7 @@
 	ssh gritcat@"ロボットの名前".local
 	```
 	以下のようにユーザー名が表示されればOK<br>
-	![](images/Pasted%20image%2020251203212021.png)
+	![](images/Pasted%20image%2020251203212021.png)<br>
 	2. ネットプランを追加し，イーサネットに固定IPを与える
 	```
 	 sudo nano /etc/netplan/99_network_config.yaml
@@ -84,17 +84,19 @@
 	```
 	ip a
 	```
-	![](images/Pasted%20image%2020251204091935.png)
+ 	<br>
+	
+	![](images/Pasted%20image%2020251204091935.png)<br>
 	再起動
 6. VSCodeでSSH接続
 	1. 拡張機能のRemote Developementをインストールしておく
-	2. Remote ExplorerタブからRaspberry piに接続
-	   ![](images/Pasted%20image%2020251204100408.png)
+	2. Remote ExplorerタブからRaspberry piに接続<br>
+	   ![](images/Pasted%20image%2020251204100408.png)<br>
 	   Connectを押して接続
-	   ![](images/Pasted%20image%2020251204100440.png)
+	   ![](images/Pasted%20image%2020251204100440.png)<br>
 	3. パスワード入力　左下に「SSH：アドレス」が表示されれば接続完了
-	4. ホームディレクトリを開く
-	   ![](images/Pasted%20image%2020251204100658.png)
+	4. ホームディレクトリを開く<br>
+	   ![](images/Pasted%20image%2020251204100658.png)<br>
 	5. ターミナルを開く
 7. ソフトウェアセットアップ
 	1. アップデート
@@ -131,9 +133,9 @@
     source ~/.bashrc
 	```
 	7. bno055のパッケージを少し書き換える
-		1. bno055/launch/bno055.launch.pyを編集
-		   ![](images/Pasted%20image%2020251206195642.png)
-		2. bno055/bno055/params/bno055_params_i2c.yamlを編集
+		1. bno055/launch/bno055.launch.pyを編集<br>
+			![](images/Pasted%20image%2020251206195642.png)<br>
+		2. bno055/bno055/params/bno055_params_i2c.yamlを編集<br>
 			![](images/Pasted%20image%2020251206195822.png)
 	8. GPSのセットアップ
 	以下のコマンドを打ち，GPSのセットアップファイルを開く
