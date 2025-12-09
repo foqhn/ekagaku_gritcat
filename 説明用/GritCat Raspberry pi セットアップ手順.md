@@ -159,7 +159,7 @@
 8. スタートアップ設定
 	1. サービスファイルを作成
 	```bash
-sudo nano /etc/systemd/system/gritcat-system.service
+	sudo nano /etc/systemd/system/gritcat-system.service
 	```
 	内容を以下のように編集
 	```bash
@@ -196,19 +196,19 @@ sudo nano /etc/systemd/system/gritcat-system.service
 	[Install]
 	# システム起動時に自動起動するように設定
 	WantedBy=multi-user.target
-```
+	```
 	2. サービスの有効化
 	```bash
-# 権限を与える
-sudo chmod +x /home/gritcat/ekagaku_gritcat/app/run_system.sh
-# systemdに新しいサービスファイルを認識させる
-sudo systemctl daemon-reload
-# OS起動時にサービスが自動で起動するように設定（有効化）
-sudo systemctl enable gritcat-system.service
-# 今すぐサービスを起動する
-sudo systemctl start gritcat-system.service
-# サービスの状態を確認する
-sudo systemctl status gritcat-system.service
+	# 権限を与える
+	sudo chmod +x /home/gritcat/ekagaku_gritcat/app/run_system.sh
+	# systemdに新しいサービスファイルを認識させる
+	sudo systemctl daemon-reload
+	# OS起動時にサービスが自動で起動するように設定（有効化）
+	sudo systemctl enable gritcat-system.service
+	# 今すぐサービスを起動する
+	sudo systemctl start gritcat-system.service
+	# サービスの状態を確認する
+	sudo systemctl status gritcat-system.service
 	```
 	3. 
 9. 
