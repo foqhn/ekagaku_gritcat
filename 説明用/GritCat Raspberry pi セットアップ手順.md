@@ -11,7 +11,7 @@
 	https://www.raspberrypi.com/software/
 	このドキュメントではVer2.0.0を持ちいます．
 2. Imagerを使いOSを焼きこむ
-	1. ハードの選択
+	1. ハードの選択//
 	   ![](images/Pasted%20image%2020251127174110.png)
 	3. OSの選択
 	   Ubuntu22.04のServerを選択する．
