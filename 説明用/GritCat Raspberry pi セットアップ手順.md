@@ -111,7 +111,7 @@
 	```bash
 	source ~/ekagaku_gritcat/app/install_ros.sh
 	```
-	途中でパスワードの入力や確認画面が出るので，適宜対応
+	途中でパスワードの入力や確認画面が出るので，適宜対応<br>
 	4. パッケージのインストール
 	```bash
 	source ~/ekagaku_gritcat/app/install_ros_packages-.sh
