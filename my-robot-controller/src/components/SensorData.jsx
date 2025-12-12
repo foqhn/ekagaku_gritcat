@@ -6,10 +6,11 @@ import React from 'react';
  * @param {string|object} props.imu - IMU データ（JSON 文字列またはオブジェクト）
  * @param {string|object} props.mag - 磁気データ（JSON 文字列またはオブジェクト）
  * @param {string|object} props.bme - BME280 データ（JSON 文字列またはオブジェクト）
+ * @param {string|number} props.compass - コンパスデータ（0-360の数値）
  * @param {string} props.wifi - WiFi データ文字列
  * @param {string} props.gps - GPS データ文字列
  */
-const SensorData = ({ imu, mag, wifi, gps, bme }) => {
+const SensorData = ({ imu, mag, wifi, gps, bme, compass }) => {
     // 安全に JSON をパースするヘルパー関数
     const safeParse = (data) => {
         if (!data) return null;
@@ -45,30 +46,38 @@ const SensorData = ({ imu, mag, wifi, gps, bme }) => {
 
     return (
         <div id="data" className="sensor-data-container">
-            {/* IMU */}
+            {/* IMU & Compass */}
             <div className="sensor-card">
-                <h2 className="sensor-title">IMU Data</h2>
-                {imuData ? (
+                <h2 className="sensor-title">IMU & Compass Data</h2>
+                {(imuData || magData || compass !== undefined) ? (
                     <div className="sensor-section">
-                        <h3 className="sensor-subtitle">Orientation</h3>
-                        {renderTable(imuData.orientation)}
-                        <h3 className="sensor-subtitle">Angular Velocity</h3>
-                        {renderTable(imuData.angular_velocity)}
-                        <h3 className="sensor-subtitle">Linear Acceleration</h3>
-                        {renderTable(imuData.linear_acceleration)}
-                    </div>
-                ) : (
-                    <p>Connecting…</p>
-                )}
-            </div>
-
-            {/* Magnetometer */}
-            <div className="sensor-card">
-                <h2 className="sensor-title">Magnetometer Data</h2>
-                {magData ? (
-                    <div className="sensor-section">
-                        <h3 className="sensor-subtitle">Magnetic Field</h3>
-                        {renderTable(magData.magnetic_field)}
+                        {compass !== undefined && compass !== null && (
+                            <>
+                                <h3 className="sensor-subtitle">Compass</h3>
+                                <table className="sensor-table">
+                                    <tbody>
+                                        <tr>
+                                            <td className="sensor-key">Heading</td>
+                                            <td className="sensor-value">{Number(compass).toFixed(2)}°</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </>
+                        )}
+                        {imuData && (
+                            <>
+                                <h3 className="sensor-subtitle">Angular Velocity</h3>
+                                {renderTable(imuData.angular_velocity)}
+                                <h3 className="sensor-subtitle">Linear Acceleration</h3>
+                                {renderTable(imuData.linear_acceleration)}
+                            </>
+                        )}
+                        {magData && (
+                            <>
+                                <h3 className="sensor-subtitle">Magnetic Field</h3>
+                                {renderTable(magData.magnetic_field)}
+                            </>
+                        )}
                     </div>
                 ) : (
                     <p>Connecting…</p>

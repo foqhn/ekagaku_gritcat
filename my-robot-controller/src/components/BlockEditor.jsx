@@ -38,33 +38,36 @@ Blockly.Blocks['robot_check_sensor'] = {
         this.appendDummyInput()
             .appendField("センサーを確認")
             .appendField(new Blockly.FieldDropdown([
-                ["IMU: 加速度 X", "imu_accel_x"],
-                ["IMU: 加速度 Y", "imu_accel_y"],
-                ["IMU: 加速度 Z", "imu_accel_z"],
+                ["コンパス: 方位(度)", "compass_heading"],
+                //["コンパス: 方位(ラジアン)", "compass_heading_rad"],
 
-                ["IMU: 角速度 X", "imu_gyro_x"],
-                ["IMU: 角速度 Y", "imu_gyro_y"],
-                ["IMU: 角速度 Z", "imu_gyro_z"],
+                ["IMU: 加速度 X(m/s^2)", "imu_accel_x"],
+                ["IMU: 加速度 Y(m/s^2)", "imu_accel_y"],
+                ["IMU: 加速度 Z(m/s^2)", "imu_accel_z"],
 
-                ["IMU: 姿勢角 X", "imu_orientation_x"],
-                ["IMU: 姿勢角 Y", "imu_orientation_y"],
-                ["IMU: 姿勢角 Z", "imu_orientation_z"],
-                ["IMU: 姿勢角 W", "imu_orientation_w"],
+                ["IMU: 角速度 X(rad/s)", "imu_gyro_x"],
+                ["IMU: 角速度 Y(rad/s)", "imu_gyro_y"],
+                ["IMU: 角速度 Z(rad/s)", "imu_gyro_z"],
 
-                ["地磁気: X", "mag_x"],
-                ["地磁気: Y", "mag_y"],
-                ["地磁気: Z", "mag_z"],
+                ["IMU: 姿勢角 X(rad)", "imu_orientation_x"],
+                ["IMU: 姿勢角 Y(rad)", "imu_orientation_y"],
+                ["IMU: 姿勢角 Z(rad)", "imu_orientation_z"],
+                ["IMU: 姿勢角 W(rad)", "imu_orientation_w"],
 
-                ["温湿度: 温度", "env_temp"],
-                ["温湿度: 湿度", "env_humidity"],
-                ["温湿度: 気圧", "env_pressure"],
+                ["地磁気: X(mG)", "mag_x"],
+                ["地磁気: Y(mG)", "mag_y"],
+                ["地磁気: Z(mG)", "mag_z"],
+
+                ["温湿度: 温度(℃)", "env_temp"],
+                ["温湿度: 湿度(%)", "env_humidity"],
+                ["温湿度: 気圧(hPa)", "env_pressure"],
 
                 ["GPS: 緯度", "gps_lat"],
                 ["GPS: 経度", "gps_lon"],
-                ["GPS: 高度", "gps_alt"],
+                ["GPS: 高度(m)", "gps_alt"],
 
-                ["WiFi強度", "wifi_rssi"],
-                ["バッテリー", "battery_voltage"]
+                ["WiFi強度(dbm)", "wifi_rssi"],
+                ["バッテリー(V)", "battery_voltage"]
             ]), "SENSOR_TYPE");
         this.setOutput(true, "Number");
         this.setColour(230);
@@ -78,6 +81,9 @@ pythonGenerator.forBlock['robot_check_sensor'] = function (block, generator) {
     var code = '0';
 
     switch (dropdown_sensor_type) {
+        case 'compass_heading': code = "robot.get_sensor('compass')['heading']"; break;
+        //case 'compass_heading_rad': code = "robot.get_sensor('compass')['heading_rad']"; break;
+
         case 'imu_accel_x': code = "robot.get_sensor('imu')['linear_acceleration']['x']"; break;
         case 'imu_accel_y': code = "robot.get_sensor('imu')['linear_acceleration']['y']"; break;
         case 'imu_accel_z': code = "robot.get_sensor('imu')['linear_acceleration']['z']"; break;

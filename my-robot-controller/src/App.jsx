@@ -27,6 +27,7 @@ function App() {
   const [wifiData, setWifiData] = useState('Connecting...');
   const [gpsData, setGpsData] = useState('Connecting...');
   const [bmeData, setBmeData] = useState('Connecting...');
+  const [compassData, setCompassData] = useState(null);
 
   // Sensor ON/OFF tracking (optimistic UI)
   const [sensorStates, setSensorStates] = useState({ cam: false, imu: false, gps: false, bme: false });
@@ -131,6 +132,9 @@ function App() {
             }
             if (data.bme280) {
               handleSensorUpdate('bme', () => setBmeData(JSON.stringify(data.bme280, null, 2)));
+            }
+            if (data.compass !== undefined) {
+              setCompassData(data.compass);
             }
           } else if (payload.type === 'log_file_list' && payload.files) {
             setLogFiles(payload.files);
@@ -431,7 +435,16 @@ function App() {
                     onDownload={handleDownloadLog}
                   />
                   <div className="panel-container">
-                    <SensorData imu={imuData} mag={magData} wifi={wifiData} gps={gpsData} bme={bmeData} />
+                    <div className="panel-container">
+                      <SensorData
+                        imu={imuData}
+                        mag={magData}
+                        wifi={wifiData}
+                        gps={gpsData}
+                        bme={bmeData}
+                        compass={compassData}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
