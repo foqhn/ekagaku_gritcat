@@ -11,50 +11,50 @@
 	https://www.raspberrypi.com/software/
 	このドキュメントではVer2.0.0を持ちいます．
 2. Imagerを使いOSを焼きこむ
-	1. ハードの選択
-	   ![](Pasted%20image%2020251127174110.png)
-	2. OSの選択
-	   Ubuntu22.04のServerを選択する．
-	   ![](Pasted%20image%2020251127174319.png)
-	   ![](Pasted%20image%2020251127174338.png)
-	   ![](Pasted%20image%2020251127174411.png)
-	3. SDカードが差し込まれていれば，OSを焼きこむSDカードが項目に現れるので，それを選択
-	   ![](Pasted%20image%2020251127174431.png)
+	1. ハードの選択<br>
+	   ![](images/Pasted%20image%2020251127174110.png)
+	3. OSの選択
+	   Ubuntu22.04のServerを選択する．<br>
+	   ![](images/Pasted%20image%2020251127174319.png)
+	   ![](images/Pasted%20image%2020251127174338.png)
+	   ![](images/Pasted%20image%2020251127174411.png)
+	4. SDカードが差し込まれていれば，OSを焼きこむSDカードが項目に現れるので，それを選択<br>
+	   ![](images/Pasted%20image%2020251127174431.png)<br>
 	   デバイス名を記入．
 	   デバイス名に混合が発生するとエラーが起こるため，被りがないようにする．
-	   （ロボットリストを参考に名前を付ける）
-	   ![](Pasted%20image%2020251127174514.png)
+	   （ロボットリストを参考に名前を付ける）<br>
+	   ![](images/Pasted%20image%2020251127174514.png)<br>
 	   ユーザー名は「gritcat」で統一
 	   パスワードは「ekagaku」で統一
-	   ![](Pasted%20image%2020251127174629.png)
-	4. SSHの有効化のトグルを必ずONに
-	   認証方法はパスワードでOK
-	   ![](Pasted%20image%2020251127174752.png)
+	   ![](images/Pasted%20image%2020251127174629.png)<br>
+	5. SSHの有効化のトグルを必ずONに
+	   認証方法はパスワードでOK<br>
+	   ![](images/Pasted%20image%2020251127174752.png)<br>
 	  完了したら書き込み開始
 
 3. PCについているLANポートのアドレスを変更
 	1. コントロールパネル⇒ネットワークとインターネット⇒ネットワークと共有センター⇒アダプター設定の変更⇒Raspberrypiを接続する予定のイーサネットポートを右クリック⇒プロパティ⇒インターネットプロトコルバージョン4
-	2. 以下のように記入
-	   ![](Pasted%20image%2020251127200438.png)
+	2. 以下のように記入<br>
+	   ![](images/Pasted%20image%2020251127200438.png)<br>
 	3. OK⇒閉じるを押す
-	4. コマンドプロンプトで「ipconfig」 アドレスが設定したとおりになっているか確認
-	   ![](Pasted%20image%2020251127200619.png)
+	4. コマンドプロンプトで「ipconfig」 アドレスが設定したとおりになっているか確認<br>
+	   ![](images/Pasted%20image%2020251127200619.png)<br>
 4. Raspberry piを起動
 	1. USBケーブルを差し，Raspberry piを起動
 	2. Raspberry piにPing（ノック）が通るか確認
 	```bash
 	ping "ロボットの名前".local
 	```
-	以下のような表示があり，応答が確認できればOK
-	![](Pasted%20image%2020251203210633.png)
+	以下のような表示があり，応答が確認できればOK<br>
+	![](images/Pasted%20image%2020251203210633.png)<br>
 	3. 
 5. SSH接続
 	1. 先ほどのホスト名にダイレクトにSSH接続
 	```bash
 	ssh gritcat@"ロボットの名前".local
 	```
-	以下のようにユーザー名が表示されればOK
-	![](Pasted%20image%2020251203212021.png)
+	以下のようにユーザー名が表示されればOK<br>
+	![](images/Pasted%20image%2020251203212021.png)<br>
 	2. ネットプランを追加し，イーサネットに固定IPを与える
 	```
 	 sudo nano /etc/netplan/99_network_config.yaml
@@ -84,17 +84,19 @@
 	```
 	ip a
 	```
-	![](Pasted%20image%2020251204091935.png)
+ 	<br>
+	
+	![](images/Pasted%20image%2020251204091935.png)<br>
 	再起動
 6. VSCodeでSSH接続
 	1. 拡張機能のRemote Developementをインストールしておく
-	2. Remote ExplorerタブからRaspberry piに接続
-	   ![](Pasted%20image%2020251204100408.png)
+	2. Remote ExplorerタブからRaspberry piに接続<br>
+	   ![](images/Pasted%20image%2020251204100408.png)<br>
 	   Connectを押して接続
-	   ![](Pasted%20image%2020251204100440.png)
+	   ![](images/Pasted%20image%2020251204100440.png)<br>
 	3. パスワード入力　左下に「SSH：アドレス」が表示されれば接続完了
-	4. ホームディレクトリを開く
-	   ![](Pasted%20image%2020251204100658.png)
+	4. ホームディレクトリを開く<br>
+	   ![](images/Pasted%20image%2020251204100658.png)<br>
 	5. ターミナルを開く
 7. ソフトウェアセットアップ
 	1. アップデート
@@ -109,7 +111,7 @@
 	```bash
 	source ~/ekagaku_gritcat/app/install_ros.sh
 	```
-	途中でパスワードの入力や確認画面が出るので，適宜対応
+	途中でパスワードの入力や確認画面が出るので，適宜対応<br>
 	4. パッケージのインストール
 	```bash
 	source ~/ekagaku_gritcat/app/install_ros_packages-.sh
@@ -131,10 +133,10 @@
     source ~/.bashrc
 	```
 	7. bno055のパッケージを少し書き換える
-		1. bno055/launch/bno055.launch.pyを編集
-		   ![](Pasted%20image%2020251206195642.png)
-		2. bno055/bno055/params/bno055_params_i2c.yamlを編集
-			![](Pasted%20image%2020251206195822.png)
+		1. bno055/launch/bno055.launch.pyを編集<br>
+			![](images/Pasted%20image%2020251206195642.png)<br>
+		2. bno055/bno055/params/bno055_params_i2c.yamlを編集<br>
+			![](images/Pasted%20image%2020251206195822.png)
 	8. GPSのセットアップ
 	以下のコマンドを打ち，GPSのセットアップファイルを開く
 	```bash
@@ -157,7 +159,7 @@
 8. スタートアップ設定
 	1. サービスファイルを作成
 	```bash
-sudo nano /etc/systemd/system/gritcat-system.service
+	sudo nano /etc/systemd/system/gritcat-system.service
 	```
 	内容を以下のように編集
 	```bash
@@ -194,19 +196,19 @@ sudo nano /etc/systemd/system/gritcat-system.service
 	[Install]
 	# システム起動時に自動起動するように設定
 	WantedBy=multi-user.target
-```
+	```
 	2. サービスの有効化
 	```bash
-# 権限を与える
-sudo chmod +x /home/gritcat/ekagaku_gritcat/app/run_system.sh
-# systemdに新しいサービスファイルを認識させる
-sudo systemctl daemon-reload
-# OS起動時にサービスが自動で起動するように設定（有効化）
-sudo systemctl enable gritcat-system.service
-# 今すぐサービスを起動する
-sudo systemctl start gritcat-system.service
-# サービスの状態を確認する
-sudo systemctl status gritcat-system.service
+	# 権限を与える
+	sudo chmod +x /home/gritcat/ekagaku_gritcat/app/run_system.sh
+	# systemdに新しいサービスファイルを認識させる
+	sudo systemctl daemon-reload
+	# OS起動時にサービスが自動で起動するように設定（有効化）
+	sudo systemctl enable gritcat-system.service
+	# 今すぐサービスを起動する
+	sudo systemctl start gritcat-system.service
+	# サービスの状態を確認する
+	sudo systemctl status gritcat-system.service
 	```
 	3. 
 9. 
