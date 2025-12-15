@@ -10,7 +10,7 @@ import React from 'react';
  * @param {string} props.wifi - WiFi データ文字列
  * @param {string} props.gps - GPS データ文字列
  */
-const SensorData = ({ imu, mag, wifi, gps, bme, compass }) => {
+const SensorData = ({ imu, mag, wifi, gps, bme, compass, cpuTemp }) => {
     // 安全に JSON をパースするヘルパー関数
     const safeParse = (data) => {
         if (!data) return null;
@@ -162,6 +162,25 @@ const SensorData = ({ imu, mag, wifi, gps, bme, compass }) => {
             <div className="sensor-card">
                 <h2 className="sensor-title">WiFi Data</h2>
                 <pre className="sensor-pre">{wifi || 'Connecting…'}</pre>
+            </div>
+
+            {/* System Status (CPU Temp) */}
+            <div className="sensor-card">
+                <h2 className="sensor-title">System Status</h2>
+                {cpuTemp !== null ? (
+                    <div className="sensor-section">
+                        <table className="sensor-table">
+                            <tbody>
+                                <tr>
+                                    <td className="sensor-key">CPU Temperature</td>
+                                    <td className="sensor-value">{cpuTemp} °C</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                ) : (
+                    <p>Connecting...</p>
+                )}
             </div>
         </div>
     );

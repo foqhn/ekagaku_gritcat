@@ -7,6 +7,7 @@ import WifiSignal from './components/WifiSignal';
 import BlockEditor from './components/BlockEditor';
 import SensorControls from './components/SensorControls';
 import LogManager from './components/LogManager';
+import I2CDeviceList from './components/I2CDeviceList';
 import './App.css';
 
 function App() {
@@ -27,7 +28,11 @@ function App() {
   const [wifiData, setWifiData] = useState('Connecting...');
   const [gpsData, setGpsData] = useState('Connecting...');
   const [bmeData, setBmeData] = useState('Connecting...');
+
+
   const [compassData, setCompassData] = useState(null);
+  const [i2cDevices, setI2cDevices] = useState([]);
+  const [cpuTemp, setCpuTemp] = useState(null);
 
   // Sensor ON/OFF tracking (optimistic UI)
   const [sensorStates, setSensorStates] = useState({ cam: false, imu: false, gps: false, bme: false });
@@ -57,6 +62,8 @@ function App() {
   // Block editor generated code
   const [generatedCode, setGeneratedCode] = useState('');
   const [blocklyState, setBlocklyState] = useState(null);
+  const [editorKey, setEditorKey] = useState(0);
+  const fileInputRef = useRef(null);
 
   // Periodically fetch robot list
   useEffect(() => {
@@ -136,6 +143,12 @@ function App() {
             if (data.compass !== undefined) {
               setCompassData(data.compass);
             }
+            if (data.cpu_temperature !== undefined) {
+              setCpuTemp(data.cpu_temperature);
+            }
+          } else if (payload.type === 'i2c_device_list' && payload.devices) {
+            setI2cDevices(payload.devices);
+            addLog(`Detected ${payload.devices.length} I2C devices.`, 'success');
           } else if (payload.type === 'log_file_list' && payload.files) {
             setLogFiles(payload.files);
           } else if (payload.type === 'log_file_content' && payload.filename && payload.data) {
@@ -150,6 +163,7 @@ function App() {
       setConnectionStatus('Not Connected');
       setWs(null);
       setLogFiles([]);
+      setI2cDevices([]);
       // Do NOT reset sensor states or overrides on disconnect to preserve user intent
     };
     ws.onerror = (error) => {
@@ -180,7 +194,12 @@ function App() {
       newWs.onopen = () => {
         setConnectionStatus(`Connected: ${selectedRobot}`);
         addLog(`Connected to ${selectedRobot}`, 'success');
+        addLog(`Connected to ${selectedRobot}`, 'success');
         setWs(newWs);
+
+        // Request I2C device scan immediately upon connection
+        newWs.send(JSON.stringify({ command: 'check_i2c_devices' }));
+
         // Do NOT reset sensor states or overrides on connect to preserve user intent
       };
     }
@@ -296,6 +315,45 @@ function App() {
     }
   };
 
+  const handleSaveBlocks = () => {
+    if (!blocklyState) {
+      addLog('No blocks data to save.', 'warning');
+      return;
+    }
+    const json = JSON.stringify(blocklyState, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'blocks.json';
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  const handleLoadBlocksClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const json = JSON.parse(event.target.result);
+        setBlocklyState(json);
+        setEditorKey(prev => prev + 1); // Force reload
+        addLog('Blocks loaded successfully.', 'success');
+      } catch (err) {
+        console.error(err);
+        addLog('Failed to load blocks file.', 'error');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = null; // Reset input
+  };
+
   // UI rendering
   return (
     <div className="app-root">
@@ -339,6 +397,19 @@ function App() {
                     <button onClick={handleSaveCode} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span>💾</span> 書き込み
                     </button>
+                    <button onClick={handleSaveBlocks} style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#8b5cf6', color: '#fff' }}>
+                      <span>📦</span> ブロック保存
+                    </button>
+                    <button onClick={handleLoadBlocksClick} style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#a855f7', color: '#fff' }}>
+                      <span>📂</span> ブロック読込
+                    </button>
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      style={{ display: 'none' }}
+                      accept=".json"
+                      onChange={handleFileChange}
+                    />
                     <button onClick={handleSavePython} style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#3b82f6', color: '#fff' }}>
                       <span>🐍</span> Python保存
                     </button>
@@ -352,6 +423,7 @@ function App() {
                   <div className="prog-editzone">
                     <div style={{ flex: 1, position: 'relative' }}>
                       <BlockEditor
+                        key={editorKey}
                         onCodeChange={setGeneratedCode}
                         initialState={blocklyState}
                         onStateChange={setBlocklyState}
@@ -388,6 +460,7 @@ function App() {
                         <h3>WiFi Signal Strength</h3>
                         <WifiSignal wifi={wifiData} />
                       </div>
+                      <I2CDeviceList devices={i2cDevices} />
                     </section>
                   )}
                 </div>
@@ -443,6 +516,7 @@ function App() {
                         gps={gpsData}
                         bme={bmeData}
                         compass={compassData}
+                        cpuTemp={cpuTemp}
                       />
                     </div>
                   </div>
