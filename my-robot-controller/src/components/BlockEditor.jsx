@@ -6,12 +6,14 @@ import * as Jp from 'blockly/msg/ja';
 
 // Set the language
 Blockly.setLocale(Jp);
+Blockly.Msg['PROCEDURES_DEFNORETURN_PROCEDURE'] = 'マイ関数';
+Blockly.Msg['PROCEDURES_DEFRETURN_PROCEDURE'] = 'マイ関数';
 
 // Define custom blocks
 Blockly.Blocks['robot_move'] = {
     init: function () {
         this.appendDummyInput()
-            .appendField("ロボットを動かす");
+            .appendField("モーター制御");
         this.appendValueInput("LEFT")
             .setCheck("Number")
             .appendField("左モーター (%)");
@@ -36,7 +38,7 @@ pythonGenerator.forBlock['robot_move'] = function (block, generator) {
 Blockly.Blocks['robot_check_sensor'] = {
     init: function () {
         this.appendDummyInput()
-            .appendField("センサーを確認")
+            .appendField("センサーチェック")
             .appendField(new Blockly.FieldDropdown([
                 ["コンパス: 方位(度)", "compass_heading"],
                 //["コンパス: 方位(ラジアン)", "compass_heading_rad"],
@@ -67,7 +69,7 @@ Blockly.Blocks['robot_check_sensor'] = {
                 ["GPS: 高度(m)", "gps_alt"],
 
                 ["WiFi強度(dbm)", "wifi_rssi"],
-                ["バッテリー(V)", "battery_voltage"]
+                //["バッテリー(V)", "battery_voltage"]
             ]), "SENSOR_TYPE");
         this.setOutput(true, "Number");
         this.setColour(230);
@@ -136,6 +138,309 @@ pythonGenerator.forBlock['robot_display_text'] = function (block, generator) {
     return code;
 };
 
+
+// Image Processing Blocks
+
+Blockly.Blocks['image_capture'] = {
+    init: function () {
+        this.appendDummyInput()
+            .appendField("画像をキャプチャ");
+        this.setPreviousStatement(true, null);
+        this.setNextStatement(true, null);
+        this.setColour(65);
+        this.setTooltip("カメラ画像の現在のフレームを取得して保存します");
+    }
+};
+
+pythonGenerator.forBlock['image_capture'] = function (block, generator) {
+    return 'robot.capture_image()\n';
+};
+
+Blockly.Blocks['image_get_size_val'] = {
+    init: function () {
+        this.appendDummyInput()
+            .appendField("画像サイズ取得: ")
+            .appendField(new Blockly.FieldDropdown([
+                ["幅 (Width)", "0"],
+                ["高さ (Height)", "1"]
+            ]), "DIMENSION");
+        this.setOutput(true, "Number");
+        this.setColour(65);
+        this.setTooltip("現在の画像の幅または高さを取得します");
+    }
+};
+
+pythonGenerator.forBlock['image_get_size_val'] = function (block, generator) {
+    var dim = block.getFieldValue('DIMENSION');
+    return [`robot.get_image_size()[${dim}]`, pythonGenerator.ORDER_ATOMIC];
+};
+
+Blockly.Blocks['image_set_roi'] = {
+    init: function () {
+        this.appendDummyInput()
+            .appendField("処理領域(ROI)を設定");
+        this.appendValueInput("X")
+            .setCheck("Number")
+            .appendField("X");
+        this.appendValueInput("Y")
+            .setCheck("Number")
+            .appendField("Y");
+        this.appendValueInput("W")
+            .setCheck("Number")
+            .appendField("幅");
+        this.appendValueInput("H")
+            .setCheck("Number")
+            .appendField("高さ");
+        this.setPreviousStatement(true, null);
+        this.setNextStatement(true, null);
+        this.setColour(65);
+        this.setTooltip("画像処理を行う領域を切り抜きます");
+    }
+};
+
+pythonGenerator.forBlock['image_set_roi'] = function (block, generator) {
+    var x = generator.valueToCode(block, 'X', pythonGenerator.ORDER_ATOMIC) || '0';
+    var y = generator.valueToCode(block, 'Y', pythonGenerator.ORDER_ATOMIC) || '0';
+    var w = generator.valueToCode(block, 'W', pythonGenerator.ORDER_ATOMIC) || '0';
+    var h = generator.valueToCode(block, 'H', pythonGenerator.ORDER_ATOMIC) || '0';
+    return `robot.set_roi(${x}, ${y}, ${w}, ${h})\n`;
+};
+
+Blockly.Blocks['image_enhance_contrast'] = {
+    init: function () {
+        this.appendDummyInput()
+            .appendField("コントラスト強調 (CLAHE)");
+        this.appendValueInput("LIMIT")
+            .setCheck("Number")
+            .appendField("制限値(Clip Limit)");
+        this.setPreviousStatement(true, null);
+        this.setNextStatement(true, null);
+        this.setColour(65);
+        this.setTooltip("画像のコントラストを強調します");
+    }
+};
+
+pythonGenerator.forBlock['image_enhance_contrast'] = function (block, generator) {
+    var limit = generator.valueToCode(block, 'LIMIT', pythonGenerator.ORDER_ATOMIC) || '2.0';
+    return `robot.enhance_contrast(clip_limit=${limit})\n`;
+};
+
+Blockly.Blocks['image_morphology'] = {
+    init: function () {
+        this.appendDummyInput()
+            .appendField("モルフォロジー変換")
+            .appendField(new Blockly.FieldDropdown([
+                ["収縮 (Erode)", "erode"],
+                ["膨張 (Dilate)", "dilate"],
+                ["オープニング (Open)", "open"],
+                ["クロージング (Close)", "close"]
+            ]), "OP");
+        this.appendValueInput("KERNEL")
+            .setCheck("Number")
+            .appendField("カーネルサイズ");
+        this.setPreviousStatement(true, null);
+        this.setNextStatement(true, null);
+        this.setColour(65);
+        this.setTooltip("ノイズ除去や領域結合を行います");
+    }
+};
+
+pythonGenerator.forBlock['image_morphology'] = function (block, generator) {
+    var op = block.getFieldValue('OP');
+    var kernel = generator.valueToCode(block, 'KERNEL', pythonGenerator.ORDER_ATOMIC) || '5';
+    return `robot.apply_morphology(operation='${op}', kernel_size=${kernel})\n`;
+};
+
+Blockly.Blocks['image_detect_color'] = {
+    init: function () {
+        this.appendDummyInput()
+            .appendField("色重心検出 (範囲指定)")
+            .appendField(new Blockly.FieldDropdown([
+                ["HSV", "HSV"],
+                ["HSL", "HSL"]
+            ]), "COLOR_SPACE");
+
+        this.appendDummyInput().appendField("最小値 (Min)");
+        this.appendValueInput("H_MIN").setCheck("Number").appendField("H");
+        this.appendValueInput("S_MIN").setCheck("Number").appendField("S");
+        this.appendValueInput("V_MIN").setCheck("Number").appendField("V/L");
+
+        this.appendDummyInput().appendField("最大値 (Max)");
+        this.appendValueInput("H_MAX").setCheck("Number").appendField("H");
+        this.appendValueInput("S_MAX").setCheck("Number").appendField("S");
+        this.appendValueInput("V_MAX").setCheck("Number").appendField("V/L");
+
+        this.setOutput(true, null); // Returns dictionary
+        this.setColour(65);
+        this.setTooltip("指定された色範囲の重心を検出します。結果は辞書形式で返されます。");
+    }
+};
+
+pythonGenerator.forBlock['image_detect_color'] = function (block, generator) {
+    var space = block.getFieldValue('COLOR_SPACE');
+    var h_min = generator.valueToCode(block, 'H_MIN', pythonGenerator.ORDER_ATOMIC) || '0';
+    var s_min = generator.valueToCode(block, 'S_MIN', pythonGenerator.ORDER_ATOMIC) || '0';
+    var v_min = generator.valueToCode(block, 'V_MIN', pythonGenerator.ORDER_ATOMIC) || '0';
+    var h_max = generator.valueToCode(block, 'H_MAX', pythonGenerator.ORDER_ATOMIC) || '0';
+    var s_max = generator.valueToCode(block, 'S_MAX', pythonGenerator.ORDER_ATOMIC) || '0';
+    var v_max = generator.valueToCode(block, 'V_MAX', pythonGenerator.ORDER_ATOMIC) || '0';
+
+    return [`robot.detect_color_centroid('${space}', [${h_min}, ${s_min}, ${v_min}], [${h_max}, ${s_max}, ${v_max}])`, pythonGenerator.ORDER_ATOMIC];
+};
+
+Blockly.Blocks['image_get_color_result'] = {
+    init: function () {
+        this.appendDummyInput()
+            .appendField("検出結果から取得")
+            .appendField(new Blockly.FieldDropdown([
+                ["重心 X", "x"],
+                ["重心 Y", "y"],
+                ["面積 (Area)", "area"],
+                ["検出有無 (Exists)", "exists"]
+            ]), "PARAM");
+        this.appendValueInput("RESULT")
+            .setCheck(null)
+            .appendField("結果データ");
+        this.setOutput(true, null);
+        this.setColour(65);
+        this.setTooltip("色検出結果の辞書から特定の値を取り出します");
+    }
+};
+
+pythonGenerator.forBlock['image_get_color_result'] = function (block, generator) {
+    var param = block.getFieldValue('PARAM');
+    var result = generator.valueToCode(block, 'RESULT', pythonGenerator.ORDER_ATOMIC) || '{}';
+    return [`${result}['${param}']`, pythonGenerator.ORDER_ATOMIC];
+};
+
+Blockly.Blocks['image_draw_marker'] = {
+    init: function () {
+        this.appendDummyInput()
+            .appendField("マーカーを描画")
+            .appendField("色")
+            .appendField(new Blockly.FieldDropdown([
+                ["赤", "red"],
+                ["緑", "green"],
+                ["青", "blue"],
+                ["黄", "yellow"],
+                ["シアン", "cyan"],
+                ["マゼンタ", "magenta"],
+                ["白", "white"],
+                ["黒", "black"]
+            ]), "COLOR");
+        this.appendValueInput("X").setCheck("Number").appendField("X");
+        this.appendValueInput("Y").setCheck("Number").appendField("Y");
+        this.appendValueInput("SIZE").setCheck("Number").appendField("サイズ");
+        this.setPreviousStatement(true, null);
+        this.setNextStatement(true, null);
+        this.setColour(65);
+        this.setTooltip("指定位置にマーカーを描画します");
+    }
+};
+
+pythonGenerator.forBlock['image_draw_marker'] = function (block, generator) {
+    var color = block.getFieldValue('COLOR');
+    var x = generator.valueToCode(block, 'X', pythonGenerator.ORDER_ATOMIC) || '0';
+    var y = generator.valueToCode(block, 'Y', pythonGenerator.ORDER_ATOMIC) || '0';
+    var size = generator.valueToCode(block, 'SIZE', pythonGenerator.ORDER_ATOMIC) || '15';
+
+    // OpenCV uses BGR
+    var bgr = '(0, 255, 0)';
+    switch (color) {
+        case 'red': bgr = '(0, 0, 255)'; break;
+        case 'green': bgr = '(0, 255, 0)'; break;
+        case 'blue': bgr = '(255, 0, 0)'; break;
+        case 'yellow': bgr = '(0, 255, 255)'; break;
+        case 'cyan': bgr = '(255, 255, 0)'; break;
+        case 'magenta': bgr = '(255, 0, 255)'; break;
+        case 'white': bgr = '(255, 255, 255)'; break;
+        case 'black': bgr = '(0, 0, 0)'; break;
+    }
+
+    return `robot.draw_marker(${x}, ${y}, color=${bgr}, size=${size})\n`;
+};
+
+Blockly.Blocks['image_draw_rect'] = {
+    init: function () {
+        this.appendDummyInput()
+            .appendField("矩形を描画")
+            .appendField("色")
+            .appendField(new Blockly.FieldDropdown([
+                ["赤", "red"],
+                ["緑", "green"],
+                ["青", "blue"],
+                ["黄", "yellow"],
+                ["シアン", "cyan"],
+                ["マゼンタ", "magenta"],
+                ["白", "white"],
+                ["黒", "black"]
+            ]), "COLOR");
+        this.appendValueInput("X").setCheck("Number").appendField("X");
+        this.appendValueInput("Y").setCheck("Number").appendField("Y");
+        this.appendValueInput("W").setCheck("Number").appendField("幅");
+        this.appendValueInput("H").setCheck("Number").appendField("高さ");
+        this.appendValueInput("THICKNESS").setCheck("Number").appendField("線の太さ");
+        this.setPreviousStatement(true, null);
+        this.setNextStatement(true, null);
+        this.setColour(65);
+        this.setTooltip("指定領域に矩形（四角形）を描画します");
+    }
+};
+
+pythonGenerator.forBlock['image_draw_rect'] = function (block, generator) {
+    var color = block.getFieldValue('COLOR');
+    var x = generator.valueToCode(block, 'X', pythonGenerator.ORDER_ATOMIC) || '0';
+    var y = generator.valueToCode(block, 'Y', pythonGenerator.ORDER_ATOMIC) || '0';
+    var w = generator.valueToCode(block, 'W', pythonGenerator.ORDER_ATOMIC) || '0';
+    var h = generator.valueToCode(block, 'H', pythonGenerator.ORDER_ATOMIC) || '0';
+    var t = generator.valueToCode(block, 'THICKNESS', pythonGenerator.ORDER_ATOMIC) || '2';
+
+    // OpenCV uses BGR
+    var bgr = '(0, 255, 0)';
+    switch (color) {
+        case 'red': bgr = '(0, 0, 255)'; break;
+        case 'green': bgr = '(0, 255, 0)'; break;
+        case 'blue': bgr = '(255, 0, 0)'; break;
+        case 'yellow': bgr = '(0, 255, 255)'; break;
+        case 'cyan': bgr = '(255, 255, 0)'; break;
+        case 'magenta': bgr = '(255, 0, 255)'; break;
+        case 'white': bgr = '(255, 255, 255)'; break;
+        case 'black': bgr = '(0, 0, 0)'; break;
+    }
+
+    return `robot.draw_rect(${x}, ${y}, ${w}, ${h}, color=${bgr}, thickness=${t})\n`;
+};
+
+Blockly.Blocks['image_show'] = {
+    init: function () {
+        this.appendDummyInput().appendField("処理画像を表示");
+        this.setPreviousStatement(true, null);
+        this.setNextStatement(true, null);
+        this.setColour(65);
+        this.setTooltip("現在の処理画像をWeb画面に送信して表示します");
+    }
+};
+
+pythonGenerator.forBlock['image_show'] = function (block, generator) {
+    return 'robot.show_image()\n';
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // Toolbox definition
 const toolbox = {
     kind: "categoryToolbox",
@@ -150,6 +455,24 @@ const toolbox = {
                 { kind: "block", type: "robot_display_text" },
             ]
         },
+        {
+            kind: "category",
+            name: "画像処理",
+            colour: "65",
+            contents: [
+                { kind: "block", type: "image_capture" },
+                { kind: "block", type: "image_get_size_val" },
+                { kind: "block", type: "image_set_roi" },
+                { kind: "block", type: "image_enhance_contrast" },
+                { kind: "block", type: "image_morphology" },
+                { kind: "block", type: "image_detect_color" },
+                { kind: "block", type: "image_get_color_result" },
+                { kind: "block", type: "image_draw_marker" },
+                { kind: "block", type: "image_draw_rect" },
+                { kind: "block", type: "image_show" },
+            ]
+        },
+
         {
             kind: "category",
             name: "論理",
@@ -194,6 +517,25 @@ const toolbox = {
             custom: "VARIABLE",
             colour: "330"
         },
+        {
+            kind: "category",
+            name: "関数",
+            custom: "PROCEDURE",
+            contents: [
+                { kind: "block", type: "procedures_defnoreturn" },
+                { kind: "block", type: "procedures_defreturn" },
+                { kind: "block", type: "procedures_callnoreturn" },
+                { kind: "block", type: "procedures_callreturn" },
+            ],
+            //default function name is "myFunction"
+            //default function parameters are "arg1", "arg2", "arg3"
+            //default function body is "pass"
+            //default function return value is "None"
+            //default function return type is "None"
+
+            colour: "290"
+        },
+
     ]
 };
 
