@@ -21,18 +21,19 @@ import math
 import csv
 from datetime import datetime
 
-# ハードウェア制御用ライブラリ
 import lgpio
 from src.oled import OLEDDisplay
 from src.motor_controller import GritMotor
 from src.system_info import get_wifi_info, get_cpu_temperature
 from src.i2c_utils import scan_i2c_bus
+from src.config_manager import ConfigManager
 from src.bme280_lgpio import BME280
 from src.mcp23017 import MCP23017 
 
 import subprocess
 import signal
 import os
+import sys
 import time
 import atexit  
 import shutil
@@ -66,8 +67,11 @@ shutdown_event = threading.Event()
 # OLEDディスプレイの初期化
 oled = OLEDDisplay(font_size=15)
 
-# ロボット識別ID (WebSocket接続時に使用)
-CURRENT_ROBOT_ID = "robot03" 
+# 設定をロード
+config = ConfigManager.load_config()
+CURRENT_ROBOT_ID = config.get("robot_id", "robot_unknown")
+SERVER_IP = config.get("server_ip", "192.168.11.14") # IPもConfig管理する場合
+SERVER_PORT = config.get("server_port", 8000)
 
 # ==========================================================
 # ヘルパー関数
@@ -1125,7 +1129,32 @@ class RobotWebsocketClient:
                 command_data = json.loads(message)
                 command = command_data.get("command")
                 print(f"Received command: {command_data}")
-                if command == "check_i2c_devices":
+                if command == "set_robot_id":
+                    new_id = command_data.get("new_id")
+                    if new_id:
+                        print(f"!!! ID Change Requested: {CURRENT_ROBOT_ID} -> {new_id} !!!")
+                        
+                        # 1. 設定ファイルに保存
+                        if ConfigManager.update_robot_id(new_id):
+                            # 2. ユーザーに通知 (OLED & ログ)
+                            oled.clear()
+                            oled.display_text(["", "ID CHANGED!", f"-> {new_id}", "Rebooting..."], start_x=0, start_y=0)
+                            
+                            # サーバーに成功レスポンスを返す（切断前に）
+                            await websocket.send(json.dumps({
+                                "type": "info",
+                                "message": f"ID changed to {new_id}. Robot is restarting..."
+                            }))
+                            
+                            await asyncio.sleep(2) # メッセージ送信とOLED表示の待機
+                            
+                            # 3. プログラムの再起動
+                            print("Restarting application...")
+                            # 現在のPythonインタプリタで、現在のスクリプトを引数付きで再実行する
+                            os.execv(sys.executable, ['python3'] + sys.argv)
+                        else:
+                            await websocket.send(json.dumps({"type": "error", "message": "Failed to save config."}))
+                elif command == "check_i2c_devices":
                     # スキャン実行
                     devices = scan_i2c_bus(bus_num=1)
                     
@@ -1310,11 +1339,13 @@ if __name__ == "__main__":
     ros_thread.start()
 
     # WebSocketクライアント起動
+    target_uri = f"ws://{SERVER_IP}:{SERVER_PORT}/ws/robot/"
+
     client = RobotWebsocketClient(
         ros_node=ros_node, 
         script_manager=script_manager,
-        robot_id="robot03",
-        server_uri="ws://192.168.11.14:8000/ws/robot/"
+        robot_id=CURRENT_ROBOT_ID, # Configから読み込んだID
+        server_uri=target_uri
     )
 
     try:
