@@ -4,3 +4,4 @@ sudo apt install i2c-tools
 sudo apt-get install gpsd gpsd-clients
 sudo apt install ros-humble-cv-bridge
 sudo apt install ros-humble-camera-ros
+sudo apt install ros-humble-example-interfaces

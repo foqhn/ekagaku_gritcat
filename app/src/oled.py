@@ -36,10 +36,12 @@ class OLEDDisplay:
             print(f"エラー: OLEDディスプレイの初期化に失敗しました: {e}")
             print("I2Cの設定や接続を確認してください。 `sudo i2cdetect -y 1` コマンドが役立ちます。")
             raise
+        self._last_lines = None
 
     def display_text(self, text_lines, start_x=5, start_y=5, line_spacing=20):
         """
-        OLEDに複数行のテキストを表示します。表示前に画面はクリアされます。
+        OLEDに複数行のテキストを表示します。
+        前回と同じ内容の場合は描画をスキップします。
 
         Args:
             text_lines (list): 表示したい文字列を要素とするリスト。
@@ -47,14 +49,22 @@ class OLEDDisplay:
             start_y (int): 最初の行の描画を開始するY座標。
             line_spacing (int): 各行の縦方向の間隔。
         """
+        # 内容が前回と全く同じなら、再描画せず終了（ちらつき防止の最強策）
+        if text_lines == self._last_lines:
+            return
+
+        # 新しい内容を保存
+        self._last_lines = text_lines[:]
+
+        # canvasコンテキストに入ると、裏で新しい画像バッファが作られます(へーすげえ)
         with canvas(self.device) as draw:
-            # 画面を黒で塗りつぶしてクリア
-            draw.rectangle(self.device.bounding_box, outline="black", fill="black")
-            
+            # 【修正】draw.rectangleでの黒塗りは不要（canvasは毎回初期化されるため）。
+            # ここを削除することで無駄な処理が減ります。
+
             # 各行のテキストを描画
             y = start_y
             for line in text_lines:
-                draw.text((start_x, y), line, font=self.font, fill="white")
+                draw.text((start_x, y), str(line), font=self.font, fill="white")
                 y += line_spacing
 
     def clear(self):
@@ -62,3 +72,4 @@ class OLEDDisplay:
         ディスプレイの表示をすべて消去します。
         """
         self.device.clear()
+        self._last_lines = None  # キャッシュもクリア
