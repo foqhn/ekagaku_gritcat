@@ -300,8 +300,8 @@ class RobotController:
                 return 0
 
     def buzzer(self, enable):
-        """ブザー制御（MCP23017のPin 0に接続されている想定）"""
-        self.digital_write(0, 1 if enable else 0)
+        """ブザー制御（MCP23017のPin 7に接続されている想定）"""
+        self.digital_write(7, 1 if enable else 0)
 
     def print_display(self, message):
         """OLEDディスプレイにメッセージを表示"""
@@ -599,13 +599,13 @@ class ScriptManager:
             show_status_display()
 
     def check_button(self):
-        """MCP23017のPin 8に接続されたボタンを監視し、プログラムの開始/停止をトグルする"""
+        """MCP23017のPin 15に接続されたボタンを監視し、プログラムの開始/停止をトグルする"""
         if not self.ros_node.mcp: return
         try:
             is_pressed = False
             with self.ros_node.mcp_lock:
                 # 0が押下状態 (Pull-up)
-                if self.ros_node.mcp.input(8) == 0:
+                if self.ros_node.mcp.input(15) == 0:
                     is_pressed = True
 
             if is_pressed:
@@ -613,18 +613,18 @@ class ScriptManager:
                 time.sleep(0.05)
                 still_pressed = False
                 with self.ros_node.mcp_lock:
-                    if self.ros_node.mcp.input(8) == 0:
+                    if self.ros_node.mcp.input(15) == 0:
                         still_pressed = True
                 
                 if still_pressed:
                     if self.execution_thread and self.execution_thread.is_alive():
                         print("Button: Stop Program")
                         self.stop_program()
-                        self._wait_for_release(8)
+                        self._wait_for_release(15)
                     else:
                         print("Button: Start Program")
                         self.start_program()
-                        self._wait_for_release(8)
+                        self._wait_for_release(15)
         except Exception as e:
             print(f"Button Check Error: {e}")
 
@@ -699,16 +699,16 @@ class RosSubscriberNode(Node):
         # IOエキスパンダ MCP23017
         try:
             self.mcp = MCP23017(bus=1, address=0x20)
-            self.mcp.setup(0, MCP23017.OUTPUT) # Buzzer
+            self.mcp.setup(7, MCP23017.OUTPUT) # Buzzer
             self.mcp.output(0, 0) 
-            self.mcp.setup(8, MCP23017.INPUT, pull_up=True) # Button
+            self.mcp.setup(15, MCP23017.INPUT, pull_up=True) # Button
             self.get_logger().info('MCP23017 initialized successfully.')
 
             # 起動音
             self.get_logger().info('System Startup Beep...')
-            self.mcp.output(0, 1)
+            self.mcp.output(7, 1)
             time.sleep(1.0)
-            self.mcp.output(0, 0)
+            self.mcp.output(7, 0)
 
         except Exception as e:
             self.get_logger().error(f'MCP23017 Init Error: {e}')

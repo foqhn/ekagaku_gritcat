@@ -107,15 +107,15 @@ class GritMotor:
                                         'IN1': 22,  # 左モーター(motor1)
                                         'IN2': 23,  # 左モーター(motor1)
                                         'ENB': 20,  # 右モーター(motor2) PWM
-                                        'IN3': 26,  # 右モーター(motor2)
-                                        'IN4': 27,   # 右モーター(motor2)
+                                        'IN3': 27,  # 右モーター(motor2)
+                                        'IN4': 26,   # 右モーター(motor2)
                                         },
                                 batt_v=16.6,
                                 abs_v=12.0)
         self.rightMD=MotorDriver(h = self.h,
                                 pins = {'ENA': 13,  # 左モーター(motor1) PWM
-                                        'IN1': 24,  # 左モーター(motor1)
-                                        'IN2': 25,  # 左モーター(motor1)
+                                        'IN1': 25,  # 左モーター(motor1)
+                                        'IN2': 24,  # 左モーター(motor1)
                                         'ENB': 21,  # 右モーター(motor2) PWM
                                         'IN3': 4,  # 右モーター(motor2)
                                         'IN4': 5,   # 右モーター(motor2)
