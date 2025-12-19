@@ -84,7 +84,7 @@
    書き込んだネットプランを適応する．
 
    ```
-   sudo chmod +x /etc/netplan/99_network_config.yaml
+   sudo chmod 600 /etc/netplan/99_network_config.yaml
    sudo netplan apply
    ```
 
