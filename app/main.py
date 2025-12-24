@@ -72,6 +72,21 @@ config = ConfigManager.load_config()
 CURRENT_ROBOT_ID = config.get("robot_id", "robot_unknown")
 SERVER_IP = config.get("server_ip", "192.168.11.14") # IPもConfig管理する場合
 SERVER_PORT = config.get("server_port", 8000)
+SERVER_URL = config.get("server_url")
+
+if SERVER_URL:
+    # URLが指定されている場合
+    # 末尾が / で終わっていない場合は補完する
+    if not SERVER_URL.endswith('/'):
+        SERVER_URL += '/'
+    TARGET_URI = SERVER_URL
+else:
+    # URLがない場合は、従来通り IP と Port から構築する
+    SERVER_IP = config.get("server_ip", "192.168.11.14")
+    SERVER_PORT = config.get("server_port", 8000)
+    TARGET_URI = f"ws://{SERVER_IP}:{SERVER_PORT}/ws/robot/"
+
+print(f"Target WebSocket URI: {TARGET_URI}{CURRENT_ROBOT_ID}")
 
 # ==========================================================
 # ヘルパー関数
@@ -599,35 +614,66 @@ class ScriptManager:
             show_status_display()
 
     def check_button(self):
-        """MCP23017のPin 15に接続されたボタンを監視し、プログラムの開始/停止をトグルする"""
+        """
+        MCP23017のPin 15を監視
+        - 短押し: プログラムの開始/停止
+        - 5秒長押し: システムシャットダウン
+        """
         if not self.ros_node.mcp: return
+        
         try:
+            # 0が押下状態 (Pull-up)
             is_pressed = False
             with self.ros_node.mcp_lock:
-                # 0が押下状態 (Pull-up)
                 if self.ros_node.mcp.input(15) == 0:
                     is_pressed = True
 
             if is_pressed:
-                # チャタリング防止
-                time.sleep(0.05)
-                still_pressed = False
-                with self.ros_node.mcp_lock:
-                    if self.ros_node.mcp.input(15) == 0:
-                        still_pressed = True
+                press_start = time.time()
+                shutdown_triggered = False
                 
-                if still_pressed:
-                    if self.execution_thread and self.execution_thread.is_alive():
-                        print("Button: Stop Program")
-                        self.stop_program()
+                # ボタンが押されている間ループ
+                while True:
+                    time.sleep(0.1)
+                    elapsed = time.time() - press_start
+                    
+                    # 押下継続確認
+                    with self.ros_node.mcp_lock:
+                        if self.ros_node.mcp.input(15) != 0:
+                            break # ボタンが離された
+                    
+                    # 1秒ごとにカウントダウンをOLEDに表示（オプション）
+                    if elapsed >= 1.0 and elapsed < 5.0:
+                        count = 5 - int(elapsed)
+                        oled.display_text(["", f" Shutdown in {count}s", "", ""], start_x=5, start_y=5)
+                    
+                    # 5秒経過
+                    if elapsed >= 5.0:
+                        shutdown_triggered = True
+                        self.system_shutdown()
+                        break
+                
+                # 離された時の判定（シャットダウンが発動していない場合）
+                if not shutdown_triggered:
+                    duration = time.time() - press_start
+                    if duration > 0.1: # チャタリング防止
+                        # 短押しの挙動（従来のプログラム開始/停止）
+                        if self.execution_thread and self.execution_thread.is_alive():
+                            print("Button: Stop Program")
+                            self.stop_program()
+                        else:
+                            print("Button: Start Program")
+                            self.start_program()
+                        
+                        # ボタンが離されるのを待つ
                         self._wait_for_release(15)
-                    else:
-                        print("Button: Start Program")
-                        self.start_program()
-                        self._wait_for_release(15)
+                        # 離されたらステータス表示に戻す
+                        show_status_display()
+
         except Exception as e:
             print(f"Button Check Error: {e}")
 
+            
     def _wait_for_release(self, pin):
         """ボタンが離されるまで待機"""
         while True:
@@ -638,6 +684,23 @@ class ScriptManager:
             except: pass
             if val == 1: break
             time.sleep(0.1)
+    def system_shutdown(self):
+        """システムを安全に停止し、電源を切る"""
+        print("!!! System Shutdown Sequence Started !!!")
+        
+        # 1. 実行中のユーザープログラムを停止
+        self.stop_program()
+        
+        # 2. ディスプレイに通知
+        oled.clear()
+        oled.display_text(["", "  SHUTTING DOWN", "  PLEASE WAIT...", ""], start_x=0, start_y=0)
+        
+        # 3. モーターの安全停止（念押し）
+        self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
+        
+        # 4. 少し待機してOSにシャットダウン命令を出す
+        time.sleep(2.0)
+        os.system("sudo shutdown -h now")
 
 
 # ==========================================================
@@ -826,6 +889,7 @@ class RosSubscriberNode(Node):
         ROSノード（ドライバ）をサブプロセスとして起動・停止する。
         bin_val: 1=Start, 0=Stop
         """
+        env = os.environ.copy()
         if sensor_type == "cam":
             proc_attr = "proc_cam"
             command = ["ros2", "run", "camera_ros", "camera_node", "--ros-args", "-p", "format:=YUYV"]
@@ -866,7 +930,8 @@ class RosSubscriberNode(Node):
                     command, 
                     start_new_session=True, # プロセスグループを分離
                     stdout=subprocess.DEVNULL, 
-                    stderr=subprocess.DEVNULL
+                    stderr=subprocess.DEVNULL,
+                    env=env 
                 )
                 setattr(self, proc_attr, new_proc)
                 self.get_logger().info(f"{log_prefix} started. PID: {new_proc.pid}")
@@ -1339,13 +1404,11 @@ if __name__ == "__main__":
     ros_thread.start()
 
     # WebSocketクライアント起動
-    target_uri = f"ws://{SERVER_IP}:{SERVER_PORT}/ws/robot/"
-
     client = RobotWebsocketClient(
         ros_node=ros_node, 
         script_manager=script_manager,
         robot_id=CURRENT_ROBOT_ID, # Configから読み込んだID
-        server_uri=target_uri
+        server_uri=TARGET_URI
     )
 
     try:
