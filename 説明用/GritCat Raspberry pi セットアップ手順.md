@@ -233,4 +233,6 @@
 
    3.
 
-9.
+9. Wifiの追加・変更方法
+   こちらを参考に
+   https://eng-memo.info/blog/netplan/
