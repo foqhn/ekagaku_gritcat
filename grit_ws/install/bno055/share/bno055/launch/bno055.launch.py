@@ -1,1 +1,0 @@
-/home/gritcat/ekagaku_gritcat/grit_ws/build/bno055/launch/bno055.launch.py
