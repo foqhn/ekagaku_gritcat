@@ -221,4 +221,4 @@ grit_ws/src/bno055/
 build/
 devel/
 log/
-install/
+grit_ws/install/
