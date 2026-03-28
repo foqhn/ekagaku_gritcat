@@ -103,22 +103,22 @@ class GritMotor:
     def __init__(self,h):
         self.h=h
         self.leftMD=MotorDriver(h = self.h,
-                                pins = {'ENA': 12,  # 左モーター(motor1) PWM
-                                        'IN1': 22,  # 左モーター(motor1)
-                                        'IN2': 23,  # 左モーター(motor1)
-                                        'ENB': 20,  # 右モーター(motor2) PWM
-                                        'IN3': 27,  # 右モーター(motor2)
-                                        'IN4': 26,   # 右モーター(motor2)
+                                pins = {'ENA': 18,  # 左モーター(motor1) PWM
+                                        'IN1': 10,  # 左モーター(motor1)
+                                        'IN2': 25,  # 左モーター(motor1)
+                                        'ENB': 12,  # 左モーター(motor2) PWM
+                                        'IN3': 7,  # 左モーター(motor2)
+                                        'IN4':11,   # 左モーター(motor2)
                                         },
                                 batt_v=16.6,
                                 abs_v=12.0)
         self.rightMD=MotorDriver(h = self.h,
-                                pins = {'ENA': 13,  # 左モーター(motor1) PWM
-                                        'IN1': 25,  # 左モーター(motor1)
-                                        'IN2': 24,  # 左モーター(motor1)
-                                        'ENB': 21,  # 右モーター(motor2) PWM
-                                        'IN3': 4,  # 右モーター(motor2)
-                                        'IN4': 5,   # 右モーター(motor2)
+                                pins = {'ENA': 13,  # 右モーター(motor1) PWM
+                                        'IN1': 5,  # 右モーター(motor1)
+                                        'IN2': 6,  # 右モーター(motor1)
+                                        'ENB': 19,  # 右モーター(motor2) PWM
+                                        'IN3': 1,  # 右モーター(motor2)
+                                        'IN4': 0,   # 右モーター(motor2)
                                         },
                                 batt_v=16.6,
                                 abs_v=12.0)
@@ -137,11 +137,13 @@ if __name__ == '__main__':
     my_motor = None # finallyブロックで参照できるようにするため
     
     try:
-        lgpio.gpio_claim_output(h, 17)
+        #lgpio.gpio_claim_output(h, 17)
+        lgpio.gpio_claim_output(h, 22)
         # MotorDriverクラスのインスタンスを作成
         my_motor = GritMotor(h)
         
-        lgpio.gpio_write(h, 17, 1)
+        #lgpio.gpio_write(h, 17, 1)
+        lgpio.gpio_write(h, 22, 1)
         
         print("前進 (速度50%) 3秒間")
         my_motor.move(50, 50)

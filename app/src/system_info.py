@@ -48,3 +48,10 @@ def get_cpu_temperature():
         return 0.0
     except Exception:
         return 0.0
+
+if __name__ == "__main__":
+    ssid, signal = get_wifi_info()
+    print(f"SSID: {ssid}, Signal Level: {signal} dBm")
+    
+    cpu_temp = get_cpu_temperature()
+    print(f"CPU Temperature: {cpu_temp:.2f} °C")

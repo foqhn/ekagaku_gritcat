@@ -251,7 +251,7 @@ class RobotController:
             if data: return data
             return {'latitude': 0.0, 'longitude': 0.0, 'altitude': 0.0, 'status': {'status': 0}}
 
-        elif sensor_type == 'bme280':
+        elif sensor_type == 'bme':
             data = None
             with bme_lock:
                 if latest_bme_data: data = latest_bme_data.copy()
@@ -743,11 +743,14 @@ class RosSubscriberNode(Node):
         # モーターコントローラ (GritMotor / lgpio)
         try:
             self.h = lgpio.gpiochip_open(0)
-            self.relay_pin = 17 # モーター電源リレー用
-            lgpio.gpio_claim_output(self.h, self.relay_pin)
+            #self.relay_pin = 17 # モーター電源リレー用
+            self.stby_pin=22
+            #lgpio.gpio_claim_output(self.h, self.relay_pin)
+            lgpio.gpio_claim_output(self.h, self.stby_pin)
             self.my_motor = GritMotor(self.h)
 
-            lgpio.gpio_write(self.h, self.relay_pin, 0)
+            #lgpio.gpio_write(self.h, self.relay_pin, 0)
+            lgpio.gpio_write(self.h, self.stby_pin, 1)
             self.get_logger().info('Motor controller initialized successfully.')
         except Exception as e:  
             self.get_logger().error(f'Error initializing motor controller: {e}')
@@ -839,10 +842,10 @@ class RosSubscriberNode(Node):
 
                 if command == "move":
                     # 速度が0でない場合、リレーをONにしてモーター電源を供給
-                    if left_speed != 0 or right_speed != 0:
-                        lgpio.gpio_write(self.h, self.relay_pin, 1)
-                    else:
-                        lgpio.gpio_write(self.h, self.relay_pin, 0)
+                    #if left_speed != 0 or right_speed != 0:
+                        #lgpio.gpio_write(self.h, self.relay_pin, 1)
+                    #else:
+                        #lgpio.gpio_write(self.h, self.relay_pin, 0)
                     self.my_motor.move(left_speed, right_speed)
 
                 elif command == "sensor":
@@ -877,7 +880,7 @@ class RosSubscriberNode(Node):
                 else:
                     # 安全停止
                     self.my_motor.move(0, 0)
-                    lgpio.gpio_write(self.h, self.relay_pin, 0)
+                    #lgpio.gpio_write(self.h, self.relay_pin, 0)
 
         except queue.Empty:
             pass
@@ -1097,7 +1100,7 @@ class RosSubscriberNode(Node):
                 self.my_motor.move(0, 0)
                 self.my_motor.cleanup()
             try:
-                lgpio.gpio_write(self.h, self.relay_pin, 0)
+                #lgpio.gpio_write(self.h, self.relay_pin, 0)
                 lgpio.gpiochip_close(self.h)
             except: pass
             self.h = None
@@ -1427,4 +1430,5 @@ if __name__ == "__main__":
                 client.bme280.close()
         except Exception: pass
         oled.clear()
+        
         print("Application has exited.")
