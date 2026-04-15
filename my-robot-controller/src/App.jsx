@@ -50,6 +50,10 @@ function App() {
   // Control state
   const [speed, setSpeed] = useState(50);
 
+  //WebRTC state
+  const pcRef = useRef(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+
   // System logs
   const [consoleLogs, setConsoleLogs] = useState([
     { msg: 'System initialized.', type: 'info' },
@@ -103,7 +107,14 @@ function App() {
       try {
         const payload = JSON.parse(event.data);
         if (payload && typeof payload === 'object') {
-          if (payload.type === 'sensor_data' && payload.data) {
+          if (payload.type === 'webrtc_answer') {
+            // ロボットからのAnswerを受理
+            pcRef.current.setRemoteDescription(new RTCSessionDescription({
+              type: 'answer',
+              sdp: payload.sdp
+            }));
+          }
+          else if (payload.type === 'sensor_data') {
             const data = payload.data;
 
             // Helper to handle sensor data updates
@@ -121,10 +132,6 @@ function App() {
                 }, 10000);
               }
             };
-
-            if (data.image) {
-              handleSensorUpdate('cam', () => setCameraSrc('data:image/jpeg;base64,' + data.image));
-            }
             if (data.imu) {
               handleSensorUpdate('imu', () => setImuData(JSON.stringify(data.imu, null, 2)));
             }
@@ -179,6 +186,13 @@ function App() {
       Object.values(timersRef.current).forEach(id => clearTimeout(id));
     };
   }, []);
+
+  // カメラツールがアクティブになったときにWebRTCを開始
+  useEffect(() => {
+    if (activeTool === 'camera' && isConnected && !remoteStream) {
+      startWebRTC();
+    }
+  }, [activeTool, isConnected]);
 
   // Event handlers
   const handleToggleConnection = () => {
@@ -353,6 +367,33 @@ function App() {
     reader.readAsText(file);
     e.target.value = null; // Reset input
   };
+  // WebRTC接続を開始する関数
+  const startWebRTC = async () => {
+    if (!ws) return;
+
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    });
+
+    pc.ontrack = (event) => {
+      console.log("Track received:", event.streams[0]);
+      setRemoteStream(event.streams[0]);
+    };
+
+    // メディアの受信設定
+    pc.addTransceiver('video', { direction: 'recvonly' });
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    // WebSocket経由でOfferをロボットに送る
+    ws.send(JSON.stringify({
+      command: 'webrtc_offer',
+      sdp: offer.sdp
+    }));
+
+    pcRef.current = pc;
+  };
 
   // UI rendering
   return (
@@ -474,7 +515,7 @@ function App() {
                 {/* Left Column */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                   <div className="panel-container">
-                    <CameraFeed src={cameraSrc} />
+                    <CameraFeed stream={remoteStream} />
                   </div>
                   <div className="panel-container" style={{ padding: '20px' }}>
                     <h3 style={{ marginTop: 0, marginBottom: '16px', color: '#94a3b8' }}>Manual Control</h3>
