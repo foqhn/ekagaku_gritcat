@@ -10,6 +10,9 @@ import asyncio
 import cv2
 import threading
 import base64
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc.contrib.media import FrameTransformTrack
+from av import VideoFrame
 
 import queue
 import json
@@ -145,6 +148,52 @@ def force_kill_os_process(pattern):
     except Exception as e:
         print(f"Failed to force kill process pattern '{pattern}': {e}")
 
+class ROSCameraTrack(VideoStreamTrack):
+    def __init__(self, ros_node):
+        super().__init__()
+        self.ros_node = ros_node
+
+    async def recv(self):
+        """
+        WebRTCが次のフレームを要求したときに呼ばれるメソッド。
+        ここで画像処理の結果を選択して返す。
+        """
+        pts, time_base = await self.next_timestamp()
+        
+        cv_img = None
+        
+        # --- 優先順位 1: ユーザープログラムのデバッグ画像 (latest_debug_image) ---
+        global latest_debug_image, last_debug_update_time
+        with debug_image_lock:
+            # 0.5秒以内に更新されていれば採用
+            if latest_debug_image is not None and (time.time() - last_debug_update_time < 0.5):
+                cv_img = latest_debug_image.copy()
+
+        # --- 優先順位 2: 生のカメラ画像 (latest_image_msg) ---
+        if cv_img is None:
+            with image_lock:
+                if latest_image_msg is not None:
+                    try:
+                        # ROSメッセージ -> OpenCV形式
+                        cv_img = self.ros_node.bridge.imgmsg_to_cv2(latest_image_msg, 'bgr8')
+                        # 生データは逆さなので反転して正立にする
+                        cv_img = cv2.flip(cv_img, -1)
+                    except Exception as e:
+                        print(f"WebRTC Image conversion error: {e}")
+
+        # --- 優先順位 3: 画像が全くない場合は黒画面 ---
+        if cv_img is None:
+            cv_img = np.zeros((480, 640, 3), np.uint8)
+            cv2.putText(cv_img, "Waiting for Camera...", (180, 240), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+        # OpenCV(BGR) -> PyAV VideoFrame に変換して送信
+        # aiortc/av は BGR24 形式を受け入れ可能
+        frame = VideoFrame.from_ndarray(cv_img, format="bgr24")
+        frame.pts = pts
+        frame.time_base = time_base
+        
+        return frame
 
 # ==========================================================
 # RobotController クラス
