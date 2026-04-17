@@ -74,7 +74,7 @@ function App() {
     const fetchRobotList = async () => {
       try {
         // User requested to use the remote base URL directly
-        const resp = await fetch('http://192.168.11.14:8000/api/robots');
+        const resp = await fetch('http://192.168.11.127:8000/api/robots');
         if (!resp.ok) {
           throw new Error(`API Error: ${resp.status}`);
         }
@@ -202,7 +202,7 @@ function App() {
       if (!selectedRobot) return;
       // User requested to use the remote base URL directly
       //const url = `wss://ekagaku-robot.onrender.com/ws/frontend/${selectedRobot}`;//リモート
-      const url = `ws://192.168.11.14:8000/ws/frontend/${selectedRobot}`;//ローカル
+      const url = `ws://192.168.11.127:8000/ws/frontend/${selectedRobot}`;//ローカル
       const newWs = new WebSocket(url);
       setConnectionStatus('Connecting...');
       newWs.onopen = () => {
