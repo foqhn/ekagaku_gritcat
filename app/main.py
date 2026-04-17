@@ -11,7 +11,6 @@ import cv2
 import threading
 import base64
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
-from aiortc.contrib.media import FrameTransformTrack
 from av import VideoFrame
 
 import queue
@@ -94,25 +93,42 @@ print(f"Target WebSocket URI: {TARGET_URI}{CURRENT_ROBOT_ID}")
 # ==========================================================
 # ヘルパー関数
 # ==========================================================
-def show_status_display():
+def show_status_display(mode="connection", text_lines_add=None):
     """
     待機画面（ロボットIDとWi-Fi接続情報）をOLEDに表示する関数。
     プログラム停止時や起動時に呼び出される。
     """
     try:
-        ssid, strength = get_wifi_info()
-        
         text_lines = []
         text_lines.append(f"ID : {CURRENT_ROBOT_ID}")
-        text_lines.append("") # 空行
-        
-        if ssid:
-            text_lines.append(f"Wi-Fi: {ssid[:12]}") 
-            text_lines.append(f"Signal: {strength}%")
-        else:
-            text_lines.append("Wi-Fi: Disconnected")
+        if mode == "connection":
+            ssid, strength = get_wifi_info()
+            if ssid:
+                text_lines.append(f"Wi-Fi: {ssid[:12]}") 
+                text_lines.append(f"Signal: {strength} dBm")
+            else:
+                text_lines.append("Wi-Fi: Disconnected")
+
+        elif mode == "custom" and text_lines_add is not None:
+            text_lines.extend(text_lines_add)
+        elif mode == "error":
+            text_lines.append("Error occurred!")
+            text_lines.append(text_lines_add if text_lines_add else "")
+        elif mode == "info":
+            text_lines.append(text_lines_add if text_lines_add else "debug info")
+            oled.display_text(text_lines, start_x=0, start_y=0, line_spacing=12)
+            time.sleep(3)  # 情報表示は3秒間表示してから通常画面に戻す
+            text_lines = []  # 画面をクリア
+            ssid, strength = get_wifi_info()
+            if ssid:
+                text_lines.append(f"ID : {CURRENT_ROBOT_ID}")
+                text_lines.append(f"Wi-Fi: {ssid[:12]}") 
+                text_lines.append(f"Signal: {strength} dBm")
+            else:
+                text_lines.append("Wi-Fi: Disconnected")
             
         oled.display_text(text_lines, start_x=0, start_y=0, line_spacing=12)
+
     except Exception as e:
         print(f"OLED Error: {e}")
 
@@ -149,15 +165,26 @@ def force_kill_os_process(pattern):
         print(f"Failed to force kill process pattern '{pattern}': {e}")
 
 class ROSCameraTrack(VideoStreamTrack):
-    def __init__(self, ros_node):
+    def __init__(self, ros_node, fps=10):
         super().__init__()
         self.ros_node = ros_node
+        self.target_fps = fps
+        self.frame_duration = 1.0 / self.target_fps
+        self.last_frame_time = 0.0
 
     async def recv(self):
         """
         WebRTCが次のフレームを要求したときに呼ばれるメソッド。
         ここで画像処理の結果を選択して返す。
         """
+        current_time = time.time()
+        elapsed = current_time - self.last_frame_time
+        wait = self.frame_duration - elapsed
+        if wait > 0:
+            await asyncio.sleep(wait)
+        
+        self.last_frame_time = time.time()
+        
         pts, time_base = await self.next_timestamp()
         
         cv_img = None
@@ -189,6 +216,8 @@ class ROSCameraTrack(VideoStreamTrack):
 
         # OpenCV(BGR) -> PyAV VideoFrame に変換して送信
         # aiortc/av は BGR24 形式を受け入れ可能
+        cv_img = cv2.resize(cv_img, (320, 240))
+        
         frame = VideoFrame.from_ndarray(cv_img, format="bgr24")
         frame.pts = pts
         frame.time_base = time_base
@@ -665,8 +694,9 @@ class ScriptManager:
     def check_button(self):
         """
         MCP23017のPin 15を監視
-        - 短押し: プログラムの開始/停止
-        - 5秒長押し: システムシャットダウン
+        - 0.1秒〜3秒未満: プログラムの開始/停止
+        - 3秒〜8秒未満: システムの再起動 (プロセス初期化)
+        - 8秒以上: システムのシャットダウン (ラズパイ電源OFF)
         """
         if not self.ros_node.mcp: return
         
@@ -681,6 +711,9 @@ class ScriptManager:
                 press_start = time.time()
                 shutdown_triggered = False
                 
+                # フィードバック用のフラグ
+                flag_3s = False
+                
                 # ボタンが押されている間ループ
                 while True:
                     time.sleep(0.1)
@@ -691,22 +724,29 @@ class ScriptManager:
                         if self.ros_node.mcp.input(15) != 0:
                             break # ボタンが離された
                     
-                    # 1秒ごとにカウントダウンをOLEDに表示（オプション）
-                    if elapsed >= 1.0 and elapsed < 5.0:
-                        count = 5 - int(elapsed)
-                        oled.display_text(["", f" Shutdown in {count}s", "", ""], start_x=5, start_y=5)
+                    # --- 3秒経過: 「再起動」のスタンバイ状態 ---
+                    if elapsed >= 3.0 and not flag_3s:
+                        flag_3s = True
+                        self._beep(0.1) # 「ピッ」と短く鳴らす
+                        oled.clear()
+                        oled.display_text(["", " Release to", " RESTART", ""], start_x=5, start_y=5)
                     
-                    # 5秒経過
-                    if elapsed >= 5.0:
+                    # --- 8秒経過: 「シャットダウン」発動 ---
+                    if elapsed >= 8.0:
                         shutdown_triggered = True
+                        self._beep(1.0) # 「ピーー」と長く鳴らす
                         self.system_shutdown()
                         break
                 
-                # 離された時の判定（シャットダウンが発動していない場合）
+                # --- ボタンが離された時の判定 ---
                 if not shutdown_triggered:
                     duration = time.time() - press_start
-                    if duration > 0.1: # チャタリング防止
-                        # 短押しの挙動（従来のプログラム開始/停止）
+                    
+                    if duration >= 3.0:
+                        # 3秒〜8秒の間で離された -> システム再起動
+                        self.system_restart()
+                    elif duration > 0.1:
+                        # 0.1秒〜3秒の間で離された -> プログラム開始/停止 (チャタリング防止)
                         if self.execution_thread and self.execution_thread.is_alive():
                             print("Button: Stop Program")
                             self.stop_program()
@@ -714,13 +754,46 @@ class ScriptManager:
                             print("Button: Start Program")
                             self.start_program()
                         
-                        # ボタンが離されるのを待つ
+                        # ボタンが完全に離されるのを待つ
                         self._wait_for_release(15)
-                        # 離されたらステータス表示に戻す
+                        # ステータス表示に戻す
                         show_status_display()
 
         except Exception as e:
             print(f"Button Check Error: {e}")
+
+    def _beep(self, duration):
+        """ブザーを指定秒数鳴らすヘルパーメソッド"""
+        if not self.ros_node.mcp: return
+        try:
+            with self.ros_node.mcp_lock:
+                self.ros_node.mcp.output(7, 1)
+            time.sleep(duration)
+            with self.ros_node.mcp_lock:
+                self.ros_node.mcp.output(7, 0)
+        except:
+            pass
+
+    def system_restart(self):
+        """システム（Pythonプロセス）を安全に再起動する"""
+        print("!!! System Restart Sequence Started !!!")
+        
+        # 1. 実行中のユーザープログラムを停止
+        self.stop_program()
+        
+        # 2. ディスプレイに通知
+        oled.clear()
+        oled.display_text(["", "  SYSTEM", "  RESTARTING...", ""], start_x=0, start_y=0)
+        
+        # 3. モーターの安全停止
+        self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
+        
+        # 少し待機してリソースの解放を待つ
+        time.sleep(1.5)
+        
+        # 4. OSレベルで現在のPythonスクリプトを再実行
+        print("Restarting application via os.execv...")
+        os.execv(sys.executable, ['python3'] + sys.argv)
 
             
     def _wait_for_release(self, pin):
@@ -902,6 +975,7 @@ class RosSubscriberNode(Node):
                     sensor_type = command_data.get("sensor_type")
                     bin_val = int(command_data.get("bin"))
                     self.sensor_ctl(sensor_type, bin_val)
+                    show_status_display(mode="info", text_lines_add=[f"{sensor_type.capitalize()}:", f"{'Started' if bin_val else 'Stopped'}"]) # ステータス表示更新
 
                 elif command == "log":
                     # ログ記録の開始/停止
@@ -944,7 +1018,14 @@ class RosSubscriberNode(Node):
         env = os.environ.copy()
         if sensor_type == "cam":
             proc_attr = "proc_cam"
-            command = ["ros2", "run", "camera_ros", "camera_node", "--ros-args", "-p", "format:=YUYV"]
+            command = [
+                "ros2", "run", "camera_ros", "camera_node", 
+                "--ros-args", 
+                "-p", "format:=YUYV", 
+                "-p", "width:=320",       # 横幅を320ピクセルに（通常は640）
+                "-p", "height:=240",      # 高さを240ピクセルに（通常は480）
+                "-p", "frame_rate:=5.0"  # FPSを5に
+            ]
             log_prefix = "Camera"
             kill_pattern = "camera_ros" 
 
@@ -1036,8 +1117,9 @@ class RosSubscriberNode(Node):
 
                 # CSVヘッダー
                 header = [
-                    "timestamp_sec", "timestamp_nanosec", 
+                    "timestamp_sec", "timestamp_curr", 
                     "orient_x", "orient_y", "orient_z", "orient_w",
+                    "compass",
                     "ang_vel_x", "ang_vel_y", "ang_vel_z", 
                     "lin_accel_x", "lin_accel_y", "lin_accel_z",
                     "mag_x", "mag_y", "mag_z",
@@ -1071,7 +1153,7 @@ class RosSubscriberNode(Node):
             self.temp_log_path = None
             self.final_log_path = None
         
-    def _write_log_callback(self):
+    def _write_log_callback(self,hz=10):
         """定期的にセンサーデータをCSVに書き込む"""
         if not self.is_logging or not self.csv_writer: return
         with imu_lock:
@@ -1087,11 +1169,14 @@ class RosSubscriberNode(Node):
             if latest_bme_data: bme_data = latest_bme_data.copy()
 
         if not imu_msg: return
-        
+        q = imu_msg.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        compass = (90.0 - math.degrees(yaw)) % 360.0
         # データの構築
         row = [
-            imu_msg.header.stamp.sec, imu_msg.header.stamp.nanosec, 
+            time.time(), time.datetime.now().isoformat(), 
             imu_msg.orientation.x, imu_msg.orientation.y, imu_msg.orientation.z, imu_msg.orientation.w,
+            compass,
             imu_msg.angular_velocity.x, imu_msg.angular_velocity.y, imu_msg.angular_velocity.z, 
             imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z
         ]
@@ -1112,6 +1197,8 @@ class RosSubscriberNode(Node):
         row.append(system_info.get('wifi_strength'))
         row.append(system_info.get('cpu_temp')) 
         self.csv_writer.writerow(row)
+        
+        
 
     def cleanup(self):
         """終了時のリソース解放"""
@@ -1219,25 +1306,79 @@ class RobotWebsocketClient:
 
         global CURRENT_ROBOT_ID
         CURRENT_ROBOT_ID = robot_id
+        
+        self.pcs = set()
 
-        # OLEDにIDと接続情報を表示
-        show_status_display()
-        text_lines = []
-        text_lines.append(f"id :  {robot_id}")
-        text_lines.append("")
-        if self.ssid and self.strength:
-            text_lines.append(f"SSID :  {self.ssid}")
-        else:
-            text_lines.append("Wi-Fi Not Connected")
-        oled.display_text(text_lines, start_x=5, start_y=5, line_spacing=12)
 
     async def run(self):
-        """WebSocket接続を開始し、送受信タスクを並行実行"""
-        async with websockets.connect(self.uri) as websocket:
-            print(f"Connected to server: {self.uri}")
-            listen_task = asyncio.create_task(self.listen_for_commands(websocket))
-            send_task = asyncio.create_task(self.send_sensor_data(websocket))
-            await asyncio.gather(listen_task, send_task)
+        """WebSocket接続を開始し、送受信タスクを並行実行 切断時は自動リトライ"""
+        while True:
+            try:
+                async with websockets.connect(self.uri, ping_interval=20,ping_timeout=20) as websocket:
+                    # 接続成功後の処理
+                    print(f"Connected to server: {self.uri}")
+                    # oledに接続成功を表示
+                    oled.clear()
+                    oled.display_text(["", "Connected!", "", ""], start_x=5, start_y=5)
+                    await asyncio.sleep(2) # 2秒表示してから通常のステータス表示に戻す
+                    show_status_display()
+                    listen_task = asyncio.create_task(self.listen_for_commands(websocket))
+                    send_task = asyncio.create_task(self.send_sensor_data(websocket))
+                    
+                    # どちらかのタスクがエラーで終了するまで待機
+                    done, pending = await asyncio.wait(
+                        [listen_task, send_task],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+                    
+                    # 残ったタスクをキャンセル
+                    for task in pending:
+                        task.cancel()
+                    #await asyncio.gather(listen_task, send_task)
+            except asyncio.CancelledError:
+                # プログラム自体の終了要求ならループを抜ける
+                break
+             
+            except Exception as e:
+                print(f"Connection failed: {e}. Retrying in 5 seconds...")
+                #oledに接続失敗を表示
+                oled.clear()
+                oled.display_text(["", "Connection Failed!", "Retrying...", ""], start_x=5, start_y=5)
+                await asyncio.sleep(5) # 5秒待ってリトライ
+            
+            
+    async def handle_offer(self, websocket, offer_sdp):
+            """ブラウザからのOfferを受け取り、Answerを返す"""
+            try:
+                print("--- WebRTC: Creating PeerConnection ---")
+                self.pc = RTCPeerConnection()
+                
+                # ビデオトラックを追加
+                self.pc.addTrack(ROSCameraTrack(self.ros_node))
+                print("--- WebRTC: Added Video Track ---")
+
+                # オファーの設定
+                offer = RTCSessionDescription(sdp=offer_sdp, type="offer")
+                await self.pc.setRemoteDescription(offer)
+                print("--- WebRTC: Remote Description Set ---")
+
+                # アンサーの作成
+                answer = await self.pc.createAnswer()
+                await self.pc.setLocalDescription(answer)
+                print("--- WebRTC: Local Description Created ---")
+
+                # アンサーを送信（ここに送信ログを追加）
+                payload = {
+                    "type": "webrtc_answer",
+                    "sdp": self.pc.localDescription.sdp
+                }
+                await websocket.send(json.dumps(payload))
+                print("--- WebRTC: Answer Sent to Browser ---")
+
+            except Exception as e:
+                print(f"!!! WebRTC Error !!! : {e}")
+                import traceback
+                traceback.print_exc()
 
     async def listen_for_commands(self, websocket):
         """サーバーからのJSONコマンドを受信して処理"""
@@ -1296,6 +1437,10 @@ class RobotWebsocketClient:
                     if filename: await self.handle_get_log_file(websocket, filename)
                     else:
                         await websocket.send(json.dumps({"type": "error", "message": "'filename' is required."}))
+                elif command == "webrtc_offer":
+                    # 基地局からのWebRTC接続要求を処理する
+                    sdp = command_data.get("sdp")
+                    asyncio.create_task(self.handle_webrtc_offer(websocket, sdp))
                 else:
                     # その他のコマンドはROSノードのコマンドキューへ
                     self.ros_node.command_queue.put(command_data)
@@ -1304,7 +1449,45 @@ class RobotWebsocketClient:
                 print(f"Received non-JSON message: {message}")
             except Exception as e:
                 print(f"Error processing command: {e}")
+                
+    async def handle_webrtc_offer(self, websocket, sdp):
+        """WebRTCのOfferを受け取り、Answerを返すシグナリング処理"""
+        print("Received WebRTC Offer. Establishing Peer Connection...")
+        
+        # 新しいピア接続を作成
+        pc = RTCPeerConnection()
+        self.pcs.add(pc)
 
+        # 接続状態の監視
+        @pc.on("connectionstatechange")
+        async def on_connectionstatechange():
+            print(f"WebRTC Connection State is {pc.connectionState}")
+            if pc.connectionState in ["failed", "closed"]:
+                self.pcs.discard(pc)
+
+        # 用意されているカメラトラックをPeerConnectionに追加
+        pc.addTrack(ROSCameraTrack(self.ros_node))
+
+        try:
+            # 基地局からのOfferをリモート情報としてセット
+            offer = RTCSessionDescription(sdp=sdp, type="offer")
+            await pc.setRemoteDescription(offer)
+
+            # ロボット側のAnswerを作成してローカル情報としてセット
+            answer = await pc.createAnswer()
+            await pc.setLocalDescription(answer)
+
+            # WebSocket経由で基地局にAnswerを返信
+            response = {
+                "type": "webrtc_answer",
+                "sdp": pc.localDescription.sdp
+            }
+            await websocket.send(json.dumps(response))
+            print("Sent WebRTC Answer.")
+            
+        except Exception as e:
+            print(f"WebRTC Negotiation Error: {e}")
+            self.pcs.discard(pc)
     async def send_sensor_data(self, websocket):
         """定期的にセンサー情報と画像をサーバーへ送信"""
         while True:
@@ -1353,44 +1536,6 @@ class RobotWebsocketClient:
 
             payload["data"]["wifi"] = {"ssid": ssid, "signal_strength": strength}
             payload["data"]["cpu_temperature"] = cpu_temp
-
-            # --- 画像送信ロジック (優先度処理) ---
-            image_data_b64 = None
-            
-            # 1. ユーザープログラムからのデバッグ画像があるか確認 (0.5秒以内に更新されたもの)
-            use_debug_image = False
-            debug_img = None
-            
-            global latest_debug_image, last_debug_update_time
-            with debug_image_lock:
-                if latest_debug_image is not None:
-                    if time.time() - last_debug_update_time < 0.5:
-                        debug_img = latest_debug_image.copy()
-                        use_debug_image = True
-            
-            if use_debug_image and debug_img is not None:
-                try:
-                    # デバッグ画像は既に正立しているのでそのままエンコード
-                    ret, frame = cv2.imencode('.jpg', debug_img)
-                    if ret:
-                        image_data_b64 = base64.b64encode(frame).decode('utf-8')
-                except Exception as e:
-                    print(f"Debug image encoding error: {e}")
-
-            # 2. デバッグ画像がない場合は、通常のROSカメラ画像を使用
-            if image_data_b64 is None and image_msg:
-                try:
-                    cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding='bgr8')
-                    # 生データは逆さなので反転して正立にする
-                    cv_image_flipped = cv2.flip(cv_image, -1)
-                    ret, frame = cv2.imencode('.jpg', cv_image_flipped)
-                    if ret:
-                        image_data_b64 = base64.b64encode(frame).decode('utf-8')
-                except Exception as e:
-                    print(f"Raw image processing error: {e}")
-
-            if image_data_b64:
-                payload["data"]["image"] = image_data_b64
 
             if payload["data"]:
                 await websocket.send(json.dumps(payload))
@@ -1472,6 +1617,14 @@ if __name__ == "__main__":
         
     finally:
         print("Shutting down rclpy...")
+        
+        if 'client' in locals() and hasattr(client, 'pcs'):
+            for pc in list(client.pcs): # list()でコピーして安全に回す
+                try:
+                    pc.close()
+                except Exception as e:
+                    print(f"Error closing WebRTC: {e}")
+            client.pcs.clear()
         rclpy.shutdown()
         ros_thread.join(timeout=2)
         try:
