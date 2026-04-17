@@ -43,8 +43,8 @@ venv.bak/
 .ipynb_checkpoints
 
 # Node.js
-node_modules/
-node_modules_bak/
+my-robot-controller/node_modules/
+my-robot-controller/node_modules_bak/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
