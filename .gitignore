@@ -44,6 +44,7 @@ venv.bak/
 
 # Node.js
 node_modules/
+node_modules_bak/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -69,10 +70,13 @@ jspm_packages/
 .env.test.local
 .env.production.local
 
+
 # Vite
+.vite/deps/
 dist/
 dist-ssr/
 *.local
+
 
 # VS Code
 .vscode/
