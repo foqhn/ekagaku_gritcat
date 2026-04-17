@@ -109,10 +109,12 @@ function App() {
         if (payload && typeof payload === 'object') {
           if (payload.type === 'webrtc_answer') {
             // ロボットからのAnswerを受理
-            pcRef.current.setRemoteDescription(new RTCSessionDescription({
-              type: 'answer',
-              sdp: payload.sdp
-            }));
+            if (pcRef.current) {
+              pcRef.current.setRemoteDescription(new RTCSessionDescription({
+                type: 'answer',
+                sdp: payload.sdp
+              })).catch(e => console.error('Failed to set remote description:', e));
+            }
           }
           else if (payload.type === 'sensor_data') {
             const data = payload.data;
@@ -187,13 +189,19 @@ function App() {
     };
   }, []);
 
-  // カメラツールがアクティブになったときにWebRTCを開始
   useEffect(() => {
     if (activeTool === 'camera' && isConnected && !remoteStream) {
       startWebRTC();
     }
-  }, [activeTool, isConnected]);
+  }, [activeTool, isConnected, remoteStream]);
 
+  // ② WebRTCの停止
+  // ロボットとのWebSocket接続が切れたときのみクリーンアップする
+  useEffect(() => {
+    if (!isConnected) {
+      stopWebRTC();
+    }
+  }, [isConnected]);
   // Event handlers
   const handleToggleConnection = () => {
     if (isConnected) {
@@ -371,6 +379,9 @@ function App() {
   const startWebRTC = async () => {
     if (!ws) return;
 
+    ws.send(JSON.stringify({ command: 'sensor', sensor_type: 'cam', bin: 1 }));
+    setSensorStates(prev => ({ ...prev, cam: true })); // UIもONにする
+
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     });
@@ -393,6 +404,16 @@ function App() {
     }));
 
     pcRef.current = pc;
+  };
+  const stopWebRTC = () => {
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    if (remoteStream) {
+      remoteStream.getTracks().forEach(track => track.stop());
+      setRemoteStream(null);
+    }
   };
 
   // UI rendering
