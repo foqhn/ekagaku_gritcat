@@ -181,9 +181,7 @@
    # サービスの説明
    Description=My Robot System Service
    # ネットワークがオンラインになってから起動する
-   After=network-online.target
-   Wants=network-online.target
-
+   After=network.target
    [Service]
 
    User=gritcat
