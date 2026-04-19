@@ -17,6 +17,10 @@ import queue
 import json
 import websockets
 
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+
 from cv_bridge import CvBridge
 import numpy as np
 import math
@@ -93,6 +97,17 @@ print(f"Target WebSocket URI: {TARGET_URI}{CURRENT_ROBOT_ID}")
 # ==========================================================
 # ヘルパー関数
 # ==========================================================
+def build_target_uri(conf):
+    """設定辞書からWebSocket URIを構築するヘルパー"""
+    uri = conf.get("server_url", "")
+    if uri:
+        if not uri.endswith('/'): uri += '/'
+        return f"{uri}{conf.get('robot_id')}"
+    else:
+        ip = conf.get("server_ip", "192.168.11.14")
+        port = conf.get("server_port", 8000)
+        return f"ws://{ip}:{port}/ws/robot/{conf.get('robot_id')}"
+    
 def show_status_display(mode="connection", text_lines_add=None):
     """
     待機画面（ロボットIDとWi-Fi接続情報）をOLEDに表示する関数。
@@ -1293,6 +1308,301 @@ def bme280_to_dict(bme_data: dict):
     }
 
 # ==========================================================
+# システム状態管理 (Mode & Config)
+# ==========================================================
+class SystemState:
+    def __init__(self):
+        self.mode = config.get("operation_mode", "local") # デフォルトはlocal
+        self.lock = threading.Lock()
+
+    def set_mode(self, new_mode):
+        with self.lock:
+            self.mode = new_mode
+            # config.jsonにも保存
+            current_conf = ConfigManager.load_config()
+            current_conf["operation_mode"] = new_mode
+            ConfigManager.save_config(current_conf)
+
+    def get_mode(self):
+        with self.lock:
+            return self.mode
+
+system_state = SystemState()
+
+# ==========================================================
+# FastAPI アプリケーション定義
+# ==========================================================
+app = FastAPI()
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return DASHBOARD_HTML
+
+@app.get("/api/status")
+async def get_status():
+    """センサーデータのサマリーを返す"""
+    with imu_lock:
+        imu = imu_to_dict(latest_imu_msg) if latest_imu_msg else None
+    with bme_lock:
+        bme = latest_bme_data.copy() if latest_bme_data else None
+    
+    wifi_ssid, wifi_rssi = get_wifi_info()
+    return {
+        "mode": system_state.get_mode(),
+        "robot_id": CURRENT_ROBOT_ID,
+        "sensors": {
+            "imu": imu,
+            "bme": bme,
+            "cpu_temp": get_cpu_temperature(),
+            "wifi": {"ssid": wifi_ssid, "rssi": wifi_rssi}
+        }
+    }
+
+@app.post("/api/move")
+async def local_move(data: dict):
+    """ローカルUIからの移動操作 (Localモード時のみ有効)"""
+    if system_state.get_mode() != "local":
+        return JSONResponse(content={"status": "denied", "reason": "System is in REMOTE mode"}, status_code=403)
+    
+    command_queue.put({
+        "command": "move",
+        "left": data.get("left", 0),
+        "right": data.get("right", 0),
+        "source": "local_dashboard"
+    })
+    return {"status": "ok"}
+
+@app.post("/api/mode")
+async def set_mode(data: dict):
+    """動作モードの切り替え"""
+    new_mode = data.get("mode")
+    if new_mode in ["local", "remote"]:
+        system_state.set_mode(new_mode)
+        # モード切替時に安全のため停止
+        command_queue.put({"command": "move", "left": 0, "right": 0})
+        return {"mode": system_state.get_mode()}
+    return JSONResponse(content={"error": "Invalid mode"}, status_code=400)
+
+# --- API: 設定の取得 ---
+@app.get("/api/config")
+async def get_config_api():
+    return ConfigManager.load_config()
+
+# --- API: 設定の保存 ---
+@app.post("/api/config")
+async def save_config_api(data: dict):
+    """config.jsonの書き換え"""
+    new_conf = ConfigManager.load_config()
+    
+    # 既存のキー名に合わせて更新
+    if "robot_id" in data: new_conf["robot_id"] = data["robot_id"]
+    if "server_ip" in data: new_conf["server_ip"] = data["server_ip"]
+    if "server_port" in data: new_conf["server_port"] = int(data["server_port"])
+    if "server_url" in data: new_conf["server_url"] = data["server_url"]
+    if "operation_mode" in data: new_conf["operation_mode"] = data["operation_mode"]
+    
+    if ConfigManager.save_config(new_conf):
+        global TARGET_URI, CURRENT_ROBOT_ID
+        CURRENT_ROBOT_ID = new_conf["robot_id"]
+        TARGET_URI = build_target_uri(new_conf)
+        
+        # WebSocketクライアントのインスタンスがある場合は、そのURIも更新
+        if 'client' in globals():
+            client.uri = TARGET_URI
+            print(f"Updated running client URI to: {client.uri}")
+        return {"status": "success"}
+    return JSONResponse(content={"error": "Failed to save config"}, status_code=500)
+@app.post("/api/restart")
+async def restart_system():
+    """システムを完全に再起動する"""
+    def delayed_restart():
+        time.sleep(1.0)
+        print("Restarting process...")
+        os.execv(sys.executable, ['python3'] + sys.argv)
+    
+    threading.Thread(target=delayed_restart).start()
+    return {"status": "restarting"}
+# ==========================================================
+# ローカルダッシュボード HTML
+# ==========================================================
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Local Dashboard</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; background: #f4f7f9; color: #333; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: auto; }
+        .card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .btn { padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        .btn-move { background: #3b82f6; color: white; width: 100%; margin-top: 10px; }
+        input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; margin-top: 5px; box-sizing: border-box; background: #fafafa; }
+        label { font-size: 0.85em; color: #555; font-weight: bold; display: block; margin-top: 10px; }
+        .hint { font-size: 0.75em; color: #888; margin-top: 4px; }
+        .section-title { border-left: 4px solid #3b82f6; padding-left: 10px; margin: 20px 0 10px 0; font-size: 1.1em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ロボット管理ダッシュボード</h1>
+        
+        <div class="grid">
+            <!-- モード設定 -->
+            <div class="card">
+                <h2 class="section-title">動作モード</h2>
+                <select id="modeSelect" style="width:100%; padding:12px; border-radius:6px;" onchange="updateMode()">
+                    <option value="local">LOCAL (ローカル操作)</option>
+                    <option value="remote">REMOTE (基地局サーバー操作)</option>
+                </select>
+                <p id="modeDesc" class="hint">現在: ---</p>
+            </div>
+
+            <!-- ステータス -->
+            <div class="card">
+                <h2 class="section-title">接続状態</h2>
+                <div id="statusList" style="font-size:0.9em;">
+                    Loading status...
+                </div>
+            </div>
+            
+        </div>
+
+        <!-- システム設定 -->
+        <div class="card">
+            <h2 class="section-title">システム設定 (config.json)</h2>
+            
+            <label>Robot ID</label>
+            <input type="text" id="conf_id" placeholder="例: robot01">
+
+            <div style="display: flex; gap: 15px; margin-top: 10px;">
+                <div style="flex: 3;">
+                    <label>サーバー IPアドレス</label>
+                    <input type="text" id="conf_ip" placeholder="192.168.x.x">
+                </div>
+                <div style="flex: 1;">
+                    <label>ポート</label>
+                    <input type="number" id="conf_port" placeholder="8000">
+                </div>
+            </div>
+            <p class="hint">※URIが空の時にこのIP/ポートが使用されます。</p>
+
+            <label style="margin-top: 20px;">サーバー固定 URI (WebSocket)</label>
+            <input type="text" id="conf_url" placeholder="ws://example.com/ws/robot/">
+            <p class="hint">※ここに入力がある場合、IP設定より優先されます。</p>
+
+            <button class="btn btn-move" onclick="saveConfig()">設定を保存して反映</button>
+        </div>
+        <div class="card">
+            <h2 class="section-title">システム操作</h2>
+            <p class="hint">設定変更後は再起動を行うことで、全てのセンサーと接続設定が完全にリセット・反映されます。</p>
+            <button class="btn btn-restart" style="background:#6b7280; color:white; width:100%;" onclick="restartSystem()">システムを再起動 (Reflesh)</button>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. ページ読み込み時に1回だけ実行する処理 (Configの読み込み) ---
+        async function loadInitialConfig() {
+            try {
+                const resConf = await fetch('/api/config');
+                const conf = await resConf.json();
+                
+                // 入力欄に値をセット
+                document.getElementById('conf_id').value = conf.robot_id || "";
+                document.getElementById('conf_ip').value = conf.server_ip || "";
+                document.getElementById('conf_port').value = conf.server_port || 8000;
+                document.getElementById('conf_url').value = conf.server_url || "";
+                document.getElementById('modeSelect').value = conf.operation_mode || "local";
+                
+                console.log("Config loaded once.");
+            } catch(e) {
+                console.error("Failed to load initial config", e);
+            }
+        }
+
+        // --- 2. 定期的に実行する処理 (センサー状態の更新) ---
+        async function updateStatus() {
+            try {
+                const resStat = await fetch('/api/status');
+                const stat = await resStat.json();
+                
+                // モード表示（バッジとテキストのみ。セレクトボックスは勝手に書き換えない）
+                const badge = document.getElementById('modeBadge');
+                if (badge) {
+                    badge.innerText = stat.mode.toUpperCase();
+                    badge.className = 'mode-badge mode-' + stat.mode;
+                }
+                document.getElementById('modeDesc').innerText = "現在稼働モード: " + stat.mode.toUpperCase();
+
+                // センサー情報のみを更新
+                document.getElementById('statusList').innerHTML = `
+                    ID: <b>${stat.robot_id}</b><br>
+                    CPU温度: <b>${stat.sensors.cpu_temp} ℃</b><br>
+                    Wi-Fi: <b>${stat.sensors.wifi.ssid}</b> (${stat.sensors.wifi.rssi} dBm)
+                `;
+            } catch(e) {
+                console.warn("Status update failed (server might be busy)");
+            }
+        }
+
+        // --- 3. ボタン操作などのイベント処理 ---
+        
+        async function updateMode() {
+            const m = document.getElementById('modeSelect').value;
+            await fetch('/api/mode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: m})
+            });
+            // 即座にステータス表示に反映
+            updateStatus();
+        }
+
+        async function saveConfig() {
+            const data = {
+                robot_id: document.getElementById('conf_id').value,
+                server_ip: document.getElementById('conf_ip').value,
+                server_port: document.getElementById('conf_port').value,
+                server_url: document.getElementById('conf_url').value,
+                operation_mode: document.getElementById('modeSelect').value
+            };
+            
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            });
+
+            if(res.ok) {
+                alert("設定を保存しました。反映にはプログラムの再起動を推奨します。");
+            } else {
+                alert("保存に失敗しました。");
+            }
+        }
+        async function restartSystem() {
+            if(!confirm("システム（Pythonプロセス）を再起動します。よろしいですか？")) return;
+            const res = await fetch('/api/restart', { method: 'POST' });
+            if(res.ok) {
+                alert("再起動命令を送信しました。3秒ほど待ってからページをリロードしてください。");
+                setTimeout(() => location.reload(), 3000);
+            }
+        }
+
+        // --- 実行開始 ---
+        // 設定は最初の一回だけ読み込む（これで入力がリセットされなくなる）
+        loadInitialConfig();
+        
+        // ステータス（センサー値）だけを3秒おきに更新
+        setInterval(updateStatus, 3000);
+        updateStatus(); // 初回実行
+    </script>
+</body>
+</html>
+"""
+
+# ==========================================================
 # WebSocketクライアント
 # 基地局サーバーとの通信を担当
 # ==========================================================
@@ -1306,6 +1616,8 @@ class RobotWebsocketClient:
 
         global CURRENT_ROBOT_ID
         CURRENT_ROBOT_ID = robot_id
+        
+        
         
         self.pcs = set()
 
@@ -1340,11 +1652,11 @@ class RobotWebsocketClient:
                 break
              
             except Exception as e:
-                print(f"Connection failed: {e}. Retrying in 5 seconds...")
+                print(f"Connection failed: {e}. Retrying in 20 seconds...")
                 #oledに接続失敗を表示
                 oled.clear()
                 oled.display_text(["", "Connection Failed!", "Retrying...", ""], start_x=5, start_y=5)
-                await asyncio.sleep(5) # 5秒待ってリトライ
+                await asyncio.sleep(20) # 5秒待ってリトライ
             
             
     async def handle_offer(self, websocket, offer_sdp):
@@ -1384,6 +1696,12 @@ class RobotWebsocketClient:
         """サーバーからのJSONコマンドを受信して処理"""
         async for message in websocket:
             try:
+                 # --- モードチェックを追加 ---
+                if system_state.get_mode() != "remote":
+                    # Remoteモード以外の場合は、上位からのコマンドを無視する
+                    # (ただし、設定変更やログ取得コマンドは許可しても良い)
+                    continue
+                
                 command_data = json.loads(message)
                 command = command_data.get("command")
                 print(f"Received command: {command_data}")
@@ -1607,10 +1925,23 @@ if __name__ == "__main__":
         robot_id=CURRENT_ROBOT_ID, # Configから読み込んだID
         server_uri=TARGET_URI
     )
-
+     #  全ての非同期タスクを管理するエントリポイント
+    async def main_loop():
+        # WebSocketタスク
+        ws_task = asyncio.create_task(client.run())
+        
+        # FastAPIサーバー (uvicorn) タスク
+        # host="0.0.0.0" にすることでLAN内の他PCからアクセス可能に
+        config_uvicorn = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="info")
+        server = uvicorn.Server(config_uvicorn)
+        web_task = asyncio.create_task(server.serve())
+        
+        await asyncio.gather(ws_task, web_task)
+        
+        
     try:
         print("Starting WebSocket client...")
-        asyncio.run(client.run())
+        asyncio.run(main_loop())
 
     except KeyboardInterrupt:
         print("Application stopped by user (Ctrl+C).")
