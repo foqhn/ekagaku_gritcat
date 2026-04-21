@@ -126,7 +126,7 @@
    ```bash
    source ~/ekagaku_gritcat/app/install_ros_packages-.sh
    python3 -m pip install --upgrade pip
-   pip install -r ~/ekagaku_gritcat/app/requirment.txt
+   pip install -r ~/ekagaku_gritcat/app/requirements.txt
    ```
    5. rosdep のセットアップ
    ```bash
