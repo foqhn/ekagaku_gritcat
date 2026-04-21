@@ -385,6 +385,7 @@ function App() {
     const pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' }, // 保険として
+        { urls: 'stun:219.94.244.174:3478' },
         {
           urls: 'turn:219.94.244.174:3478?transport=udp', // udp指定 安定化ため
           username: 'catuser',
