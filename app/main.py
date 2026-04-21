@@ -10,7 +10,7 @@ import asyncio
 import cv2
 import threading
 import base64
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, RTCConfiguration, RTCIceServer
 from av import VideoFrame
 
 import queue
@@ -1771,9 +1771,17 @@ class RobotWebsocketClient:
     async def handle_webrtc_offer(self, websocket, sdp):
         """WebRTCのOfferを受け取り、Answerを返すシグナリング処理"""
         print("Received WebRTC Offer. Establishing Peer Connection...")
-        
+        ice_servers = [
+            RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
+            RTCIceServer(
+                urls=["turn:219.94.244.174:3478?transport=udp", "turn:219.94.244.174:3478?transport=tcp"],
+                username="catuser",
+                credential="catpassword"
+            )
+        ]
+        config = RTCConfiguration(iceServers=ice_servers)
         # 新しいピア接続を作成
-        pc = RTCPeerConnection()
+        pc = RTCPeerConnection(configuration=config)
         self.pcs.add(pc)
 
         # 接続状態の監視
