@@ -383,7 +383,19 @@ function App() {
     setSensorStates(prev => ({ ...prev, cam: true })); // UIもONにする
 
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }, // 保険として
+        {
+          urls: 'turn:219.94.244.174:3478?transport=udp', // udp指定 安定化ため
+          username: 'catuser',
+          credential: 'catpassword'
+        },
+        {
+          urls: 'turn:219.94.244.174:3478?transport=tcp', // 厳しいファイアウォール用
+          username: 'catuser',
+          credential: 'catpassword'
+        }
+      ]
     });
 
     pc.ontrack = (event) => {
@@ -396,6 +408,22 @@ function App() {
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+
+    await new Promise((resolve) => {
+      if (pc.iceGatheringState === 'complete') {
+        resolve();
+      } else {
+        const checkState = () => {
+          if (pc.iceGatheringState === 'complete') {
+            pc.removeEventListener('icegatheringstatechange', checkState);
+            resolve();
+          }
+        };
+        pc.addEventListener('icegatheringstatechange', checkState);
+        // 万が一集まらない時のために、2秒で強制的に次に進む
+        setTimeout(resolve, 2000);
+      }
+    });
 
     // WebSocket経由でOfferをロボットに送る
     ws.send(JSON.stringify({
