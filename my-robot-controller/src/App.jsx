@@ -428,7 +428,7 @@ function App() {
     // WebSocket経由でOfferをロボットに送る
     ws.send(JSON.stringify({
       command: 'webrtc_offer',
-      sdp: offer.sdp
+      sdp: pc.localDescription.sdp
     }));
 
     pcRef.current = pc;
