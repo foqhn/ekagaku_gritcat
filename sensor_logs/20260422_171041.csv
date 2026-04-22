@@ -1,0 +1,1 @@
+timestamp_sec,timestamp_curr,orient_x,orient_y,orient_z,orient_w,compass,ang_vel_x,ang_vel_y,ang_vel_z,lin_accel_x,lin_accel_y,lin_accel_z,mag_x,mag_y,mag_z,gps_status,latitude,longitude,altitude,temperature_celsius,pressure_hpa,humidity_percent,wifi_ssid,wifi_signal_strength,cpu_temperature

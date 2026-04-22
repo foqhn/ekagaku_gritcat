@@ -1772,7 +1772,7 @@ class RobotWebsocketClient:
         """WebRTCのOfferを受け取り、Answerを返すシグナリング処理"""
         print("Received WebRTC Offer. Establishing Peer Connection...")
         ice_servers = [
-            RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
+            #RTCIceServer(urls=["stun:219.94.244.174:3478","stun:stun.l.google.com:19302"]),
             RTCIceServer(
                 urls=["turn:219.94.244.174:3478?transport=udp", "turn:219.94.244.174:3478?transport=tcp"],
                 username="catuser",
@@ -1802,7 +1802,13 @@ class RobotWebsocketClient:
             # ロボット側のAnswerを作成してローカル情報としてセット
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
-
+            timeout = 5.0
+            start_time = asyncio.get_event_loop().time()
+            while pc.iceGatheringState != "complete":
+                await asyncio.sleep(0.1)
+                if asyncio.get_event_loop().time() - start_time > timeout:
+                    print("WebRTC: ICE gathering timed out, sending partial SDP")
+                    break
             # WebSocket経由で基地局にAnswerを返信
             response = {
                 "type": "webrtc_answer",
