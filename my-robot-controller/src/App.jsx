@@ -9,6 +9,7 @@ import SensorControls from './components/SensorControls';
 import LogManager from './components/LogManager';
 import I2CDeviceList from './components/I2CDeviceList';
 import './App.css';
+import WebSocketCameraFeed from './components/WebsocketCameraFeed';
 
 function App() {
   // UI navigation state
@@ -559,7 +560,7 @@ function App() {
                 {/* Left Column */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                   <div className="panel-container">
-                    <CameraFeed stream={remoteStream} />
+                    <WebSocketCameraFeed robotId={selectedRobot} serverIp={'192.168.11.127:8000'} />
                   </div>
                   <div className="panel-container" style={{ padding: '20px' }}>
                     <h3 style={{ marginTop: 0, marginBottom: '16px', color: '#94a3b8' }}>Manual Control</h3>
