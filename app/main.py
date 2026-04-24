@@ -183,66 +183,56 @@ def force_kill_os_process(pattern):
     except Exception as e:
         print(f"Failed to force kill process pattern '{pattern}': {e}")
 
-class ROSCameraTrack(VideoStreamTrack):
-    def __init__(self, ros_node, fps=10):
-        super().__init__()
+
+#==============================================================================
+# 画像配信クライアント
+#==============================================================================
+class ImageStreamClient:
+    def __init__(self, ros_node, robot_id, server_uri):
         self.ros_node = ros_node
-        self.target_fps = fps
-        self.frame_duration = 1.0 / self.target_fps
-        self.last_frame_time = 0.0
+        self.uri = f"{server_uri}video/{robot_id}" # パスを分ける
+        self.quality = 30  # JPEG品質 (1-100)
+        self.target_width = 320
 
-    async def recv(self):
-        """
-        WebRTCが次のフレームを要求したときに呼ばれるメソッド。
-        ここで画像処理の結果を選択して返す。
-        """
-        current_time = time.time()
-        elapsed = current_time - self.last_frame_time
-        wait = self.frame_duration - elapsed
-        if wait > 0:
-            await asyncio.sleep(wait)
-        
-        self.last_frame_time = time.time()
-        
-        pts, time_base = await self.next_timestamp()
-        
-        cv_img = None
-        
-        # --- 優先順位 1: ユーザープログラムのデバッグ画像 (latest_debug_image) ---
-        global latest_debug_image, last_debug_update_time
-        with debug_image_lock:
-            # 0.5秒以内に更新されていれば採用
-            if latest_debug_image is not None and (time.time() - last_debug_update_time < 0.5):
-                cv_img = latest_debug_image.copy()
+    async def run(self):
+        while True:
+            try:
+                async with websockets.connect(self.uri) as websocket:
+                    print("Video Stream Connected")
+                    while True:
+                        # 1. 画像の取得（最新のものを共有変数から）
+                        with image_lock:
+                            msg = latest_image_msg
+                            if msg is None:
+                                await asyncio.sleep(0.1)
+                                continue
+                            
+                            # ROSメッセージ -> CV2
+                            cv_img = self.ros_node.bridge.imgmsg_to_cv2(msg, 'bgr8')
+                            cv_img = cv2.flip(cv_img, -1)
 
-        # --- 優先順位 2: 生のカメラ画像 (latest_image_msg) ---
-        if cv_img is None:
-            with image_lock:
-                if latest_image_msg is not None:
-                    try:
-                        # ROSメッセージ -> OpenCV形式
-                        cv_img = self.ros_node.bridge.imgmsg_to_cv2(latest_image_msg, 'bgr8')
-                        # 生データは逆さなので反転して正立にする
-                        cv_img = cv2.flip(cv_img, -1)
-                    except Exception as e:
-                        print(f"WebRTC Image conversion error: {e}")
+                        # 2. 軽量化処理
+                        # リサイズ
+                        h, w = cv_img.shape[:2]
+                        scale = self.target_width / w
+                        cv_img = cv2.resize(cv_img, (int(w * scale), int(h * scale)))
 
-        # --- 優先順位 3: 画像が全くない場合は黒画面 ---
-        if cv_img is None:
-            cv_img = np.zeros((480, 640, 3), np.uint8)
-            cv2.putText(cv_img, "Waiting for Camera...", (180, 240), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                        # JPEG圧縮 (バイナリ化)
+                        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), self.quality]
+                        result, encimg = cv2.imencode('.jpg', cv_img, encode_param)
+                        
+                        if result:
+                            # 3. 送信
+                            # awaitで待機することで、送信完了まで次のループ（画像取得）に行かない
+                            # これにより、ネットワーク速度に合わせて自動的にFPSが調整される
+                            await websocket.send(encimg.tobytes())
+                        
+                        # CPU負荷を抑えるための微小な待機
+                        await asyncio.sleep(0.05) # 最大20fps程度に制限
 
-        # OpenCV(BGR) -> PyAV VideoFrame に変換して送信
-        # aiortc/av は BGR24 形式を受け入れ可能
-        cv_img = cv2.resize(cv_img, (320, 240))
-        
-        frame = VideoFrame.from_ndarray(cv_img, format="bgr24")
-        frame.pts = pts
-        frame.time_base = time_base
-        
-        return frame
-
+            except Exception as e:
+                print(f"Video Stream Error: {e}")
+                await asyncio.sleep(5) # 再接続待機
 # ==========================================================
 # RobotController クラス
 # ユーザープログラム(user_program.py)から利用されるAPIを提供する
