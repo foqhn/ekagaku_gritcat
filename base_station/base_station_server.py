@@ -25,6 +25,14 @@ templates = Jinja2Templates(directory="static")
 connections: Dict[str, Dict[str, WebSocket | None]] = {}
 
 
+def get_conn_dict(robot_id: str):
+    if robot_id not in connections:
+        connections[robot_id] = {
+            "robot_cmd": None, "robot_vid": None,
+            "fe_cmd": None, "fe_vid": None
+        }
+    return connections[robot_id]
+
 # --- HTTP エンドポイント ---
 
 @app.get("/", response_class=HTMLResponse)
@@ -46,8 +54,7 @@ async def get_robot_list():
     return connected_robots
 
 
-# --- WebSocket エンドポイント (変更なし) ---
-
+# --- WebSocket コマンドエンドポイント (ROBOT) ---
 @app.websocket("/ws/robot/{robot_id}")
 async def websocket_robot_endpoint(websocket: WebSocket, robot_id: str):
     await websocket.accept()
@@ -72,7 +79,42 @@ async def websocket_robot_endpoint(websocket: WebSocket, robot_id: str):
         if robot_id in connections:
             # フロントエンドにも切断を通知したい場合はここで処理を追加できる
             del connections[robot_id]
+# --- WebSocket エンドポイント 映像用（ROBOT） ---
+@app.websocket("/ws/robot/video/{robot_id}")
+async def video_endpoint(websocket: WebSocket, robot_id: str):
+    await websocket.accept()
+    conn = get_conn_dict(robot_id)
+    conn["robot_vid"] = websocket
+    try:
+        while True:
+            data = await websocket.receive_bytes() # JPEGバイナリ
+            fe = conn.get("fe_vid")
+            if fe:
+                # 映像用フロントエンドにのみ転送
+                await fe.send_bytes(data)
+    except WebSocketDisconnect:
+        conn["robot_vid"] = None
+        print(f"Robot VID '{robot_id}' disconnected.")
 
+
+#--- WebSocket エンドポイント 映像用（FRONTEND） ---
+@app.websocket("/ws/robot/video/{robot_id}")
+async def video_endpoint(websocket: WebSocket, robot_id: str):
+    await websocket.accept()
+    conn = get_conn_dict(robot_id)
+    conn["robot_vid"] = websocket
+    try:
+        while True:
+            data = await websocket.receive_bytes() # JPEGバイナリ
+            fe = conn.get("fe_vid")
+            if fe:
+                # 映像用フロントエンドにのみ転送
+                await fe.send_bytes(data)
+    except WebSocketDisconnect:
+        conn["robot_vid"] = None
+        print(f"Robot VID '{robot_id}' disconnected.")
+
+#--- WebSocket コマンドエンドポイント (FRONTEND) ---
 @app.websocket("/ws/frontend/{robot_id}")
 async def websocket_frontend_endpoint(websocket: WebSocket, robot_id: str):
     await websocket.accept()
@@ -97,5 +139,5 @@ async def websocket_frontend_endpoint(websocket: WebSocket, robot_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    # 基地局PCのIPアドレス(192.168.137.1)で待ち受ける
-    uvicorn.run(app, host="192.168.11.14", port=8000)
+    # 基地局PCのIPアドレス(192.168.11.127)で待ち受ける
+    uvicorn.run(app, host="192.168.11.127", port=8000)
