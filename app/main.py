@@ -44,6 +44,10 @@ import time
 import atexit  
 import shutil
 
+import logging
+# logging.basicConfig(level=logging.DEBUG)
+# logging.getLogger("aioice").setLevel(logging.DEBUG)
+
 # ==========================================================
 # グローバル変数と排他制御 (Locks)
 # ==========================================================
@@ -1771,25 +1775,51 @@ class RobotWebsocketClient:
     async def handle_webrtc_offer(self, websocket, sdp):
         """WebRTCのOfferを受け取り、Answerを返すシグナリング処理"""
         print("Received WebRTC Offer. Establishing Peer Connection...")
+        
         ice_servers = [
-            #RTCIceServer(urls=["stun:219.94.244.174:3478","stun:stun.l.google.com:19302"]),
             RTCIceServer(
-                urls=["turn:219.94.244.174:3478?transport=udp", "turn:219.94.244.174:3478?transport=tcp"],
+                urls=["stun:219.94.244.174:3478"]
+            ),
+            RTCIceServer(
+                urls=[
+                    #"turn:219.94.244.174:3478?transport=udp",
+                    "turn:219.94.244.174:3478?transport=tcp",
+                    #"turn:219.94.244.174:3478"     
+                ],
                 username="catuser",
                 credential="catpassword"
             )
         ]
+        
         config = RTCConfiguration(iceServers=ice_servers)
         # 新しいピア接続を作成
         pc = RTCPeerConnection(configuration=config)
         self.pcs.add(pc)
+        print("Created new RTCPeerConnection for WebRTC session.{Current PC count: " + str(len(self.pcs)) + "}")
 
         # 接続状態の監視
         @pc.on("connectionstatechange")
         async def on_connectionstatechange():
             print(f"WebRTC Connection State is {pc.connectionState}")
-            if pc.connectionState in ["failed", "closed"]:
+            #print(pc.localDescription.sdp)
+            if pc.connectionState in["failed", "closed"]:
                 self.pcs.discard(pc)
+        @pc.on("icecandidate")
+        def on_icecandidate(candidate):
+            print("New ICE candidate gathered:")
+            print(candidate)
+        # @pc.on("icecandidate")
+        # async def on_icecandidate(candidate):
+        #     if candidate:
+        #         await websocket.send(json.dumps({
+        #             "type": "candidate",
+        #             "candidate": candidate.to_sdp()
+        #         }))
+        #         print("Sent ICE candidate to server:")
+        #         print(candidate)
+        @pc.on("iceconnectionstatechange")
+        async def on_iceconnectionstatechange():
+            print("ICE Connection State:", pc.iceConnectionState)
 
         # 用意されているカメラトラックをPeerConnectionに追加
         pc.addTrack(ROSCameraTrack(self.ros_node))
@@ -1802,13 +1832,16 @@ class RobotWebsocketClient:
             # ロボット側のAnswerを作成してローカル情報としてセット
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
-            timeout = 5.0
+            
+            # 修正ポイント 3: タイムアウトを10秒に延長
+            timeout = 30.0
             start_time = asyncio.get_event_loop().time()
             while pc.iceGatheringState != "complete":
                 await asyncio.sleep(0.1)
                 if asyncio.get_event_loop().time() - start_time > timeout:
-                    print("WebRTC: ICE gathering timed out, sending partial SDP")
+                    print("!!! WebRTC: ICE gathering timed out, sending partial SDP !!!")
                     break
+                    
             # WebSocket経由で基地局にAnswerを返信
             response = {
                 "type": "webrtc_answer",
@@ -1820,6 +1853,7 @@ class RobotWebsocketClient:
         except Exception as e:
             print(f"WebRTC Negotiation Error: {e}")
             self.pcs.discard(pc)
+            
     async def send_sensor_data(self, websocket):
         """定期的にセンサー情報と画像をサーバーへ送信"""
         while True:
