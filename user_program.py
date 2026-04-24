@@ -1,2 +1,2 @@
 while True:
-  robot.move(0, 0)
+  robot.move(50, 50)

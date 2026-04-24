@@ -184,55 +184,6 @@ def force_kill_os_process(pattern):
         print(f"Failed to force kill process pattern '{pattern}': {e}")
 
 
-#==============================================================================
-# 画像配信クライアント
-#==============================================================================
-class ImageStreamClient:
-    def __init__(self, ros_node, robot_id, server_uri):
-        self.ros_node = ros_node
-        self.uri = f"{server_uri}video/{robot_id}" # パスを分ける
-        self.quality = 30  # JPEG品質 (1-100)
-        self.target_width = 320
-
-    async def run(self):
-        while True:
-            try:
-                async with websockets.connect(self.uri) as websocket:
-                    print("Video Stream Connected")
-                    while True:
-                        # 1. 画像の取得（最新のものを共有変数から）
-                        with image_lock:
-                            msg = latest_image_msg
-                            if msg is None:
-                                await asyncio.sleep(0.1)
-                                continue
-                            
-                            # ROSメッセージ -> CV2
-                            cv_img = self.ros_node.bridge.imgmsg_to_cv2(msg, 'bgr8')
-                            cv_img = cv2.flip(cv_img, -1)
-
-                        # 2. 軽量化処理
-                        # リサイズ
-                        h, w = cv_img.shape[:2]
-                        scale = self.target_width / w
-                        cv_img = cv2.resize(cv_img, (int(w * scale), int(h * scale)))
-
-                        # JPEG圧縮 (バイナリ化)
-                        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), self.quality]
-                        result, encimg = cv2.imencode('.jpg', cv_img, encode_param)
-                        
-                        if result:
-                            # 3. 送信
-                            # awaitで待機することで、送信完了まで次のループ（画像取得）に行かない
-                            # これにより、ネットワーク速度に合わせて自動的にFPSが調整される
-                            await websocket.send(encimg.tobytes())
-                        
-                        # CPU負荷を抑えるための微小な待機
-                        await asyncio.sleep(0.05) # 最大20fps程度に制限
-
-            except Exception as e:
-                print(f"Video Stream Error: {e}")
-                await asyncio.sleep(5) # 再接続待機
 # ==========================================================
 # RobotController クラス
 # ユーザープログラム(user_program.py)から利用されるAPIを提供する
@@ -652,7 +603,7 @@ class ScriptManager:
             self.stop_event.set()
             # スレッドに例外を注入して中断させる
             raise_keyboard_interrupt(self.execution_thread)
-            self.execution_thread.join(timeout=2)
+            self.execution_thread.join(timeout=3.0)
             
             # それでも止まらない場合の最終手段
             if self.execution_thread.is_alive():
@@ -685,6 +636,8 @@ class ScriptManager:
         except KeyboardInterrupt:
             print("\n!!! User Script Interrupted by System (Stop Command) !!!")
             oled.display_text(["", "   STOPPED", "", ""], start_x=5, start_y=5)
+            #motor stop
+            self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
             time.sleep(1.0) 
 
         except SyntaxError as e:
@@ -699,6 +652,25 @@ class ScriptManager:
             print("--- Safety Cleanup: Stopping Motors ---")
             robot.stop()
             show_status_display()
+            
+    def _inject_system_exit(self):
+        """
+        スレッドがどうしても停止しない場合の最終手段。
+        SystemExit例外を強制注入してスレッドをキルする。
+        """
+        if not self.execution_thread or not self.execution_thread.is_alive():
+            return
+        
+        tid = ctypes.c_long(self.execution_thread.ident)
+        ex_type = ctypes.py_object(SystemExit) 
+        
+        # Python C APIを利用して例外をセット
+        res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ex_type)
+        if res == 0:
+            print("Error: Invalid thread ID for SystemExit injection")
+        elif res > 1:
+            # 意図しない影響が出た場合は取り消し
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None)
 
     def check_button(self):
         """
@@ -1183,7 +1155,7 @@ class RosSubscriberNode(Node):
         compass = (90.0 - math.degrees(yaw)) % 360.0
         # データの構築
         row = [
-            time.time(), time.datetime.now().isoformat(), 
+            time.time(), datetime.now().isoformat(), 
             imu_msg.orientation.x, imu_msg.orientation.y, imu_msg.orientation.z, imu_msg.orientation.w,
             compass,
             imu_msg.angular_velocity.x, imu_msg.angular_velocity.y, imu_msg.angular_velocity.z, 
@@ -1752,7 +1724,7 @@ class RobotWebsocketClient:
                 elif command == "webrtc_offer":
                     # 基地局からのWebRTC接続要求を処理する
                     sdp = command_data.get("sdp")
-                    asyncio.create_task(self.handle_webrtc_offer(websocket, sdp))
+                    #asyncio.create_task(self.handle_webrtc_offer(websocket, sdp))
                 else:
                     # その他のコマンドはROSノードのコマンドキューへ
                     self.ros_node.command_queue.put(command_data)
@@ -1761,89 +1733,7 @@ class RobotWebsocketClient:
                 print(f"Received non-JSON message: {message}")
             except Exception as e:
                 print(f"Error processing command: {e}")
-                
-    async def handle_webrtc_offer(self, websocket, sdp):
-        """WebRTCのOfferを受け取り、Answerを返すシグナリング処理"""
-        print("Received WebRTC Offer. Establishing Peer Connection...")
-        
-        ice_servers = [
-            RTCIceServer(
-                urls=["stun:219.94.244.174:3478"]
-            ),
-            RTCIceServer(
-                urls=[
-                    #"turn:219.94.244.174:3478?transport=udp",
-                    "turn:219.94.244.174:3478?transport=tcp",
-                    #"turn:219.94.244.174:3478"     
-                ],
-                username="catuser",
-                credential="catpassword"
-            )
-        ]
-        
-        config = RTCConfiguration(iceServers=ice_servers)
-        # 新しいピア接続を作成
-        pc = RTCPeerConnection(configuration=config)
-        self.pcs.add(pc)
-        print("Created new RTCPeerConnection for WebRTC session.{Current PC count: " + str(len(self.pcs)) + "}")
-
-        # 接続状態の監視
-        @pc.on("connectionstatechange")
-        async def on_connectionstatechange():
-            print(f"WebRTC Connection State is {pc.connectionState}")
-            #print(pc.localDescription.sdp)
-            if pc.connectionState in["failed", "closed"]:
-                self.pcs.discard(pc)
-        @pc.on("icecandidate")
-        def on_icecandidate(candidate):
-            print("New ICE candidate gathered:")
-            print(candidate)
-        # @pc.on("icecandidate")
-        # async def on_icecandidate(candidate):
-        #     if candidate:
-        #         await websocket.send(json.dumps({
-        #             "type": "candidate",
-        #             "candidate": candidate.to_sdp()
-        #         }))
-        #         print("Sent ICE candidate to server:")
-        #         print(candidate)
-        @pc.on("iceconnectionstatechange")
-        async def on_iceconnectionstatechange():
-            print("ICE Connection State:", pc.iceConnectionState)
-
-        # 用意されているカメラトラックをPeerConnectionに追加
-        pc.addTrack(ROSCameraTrack(self.ros_node))
-
-        try:
-            # 基地局からのOfferをリモート情報としてセット
-            offer = RTCSessionDescription(sdp=sdp, type="offer")
-            await pc.setRemoteDescription(offer)
-
-            # ロボット側のAnswerを作成してローカル情報としてセット
-            answer = await pc.createAnswer()
-            await pc.setLocalDescription(answer)
-            
-            # 修正ポイント 3: タイムアウトを10秒に延長
-            timeout = 30.0
-            start_time = asyncio.get_event_loop().time()
-            while pc.iceGatheringState != "complete":
-                await asyncio.sleep(0.1)
-                if asyncio.get_event_loop().time() - start_time > timeout:
-                    print("!!! WebRTC: ICE gathering timed out, sending partial SDP !!!")
-                    break
-                    
-            # WebSocket経由で基地局にAnswerを返信
-            response = {
-                "type": "webrtc_answer",
-                "sdp": pc.localDescription.sdp
-            }
-            await websocket.send(json.dumps(response))
-            print("Sent WebRTC Answer.")
-            
-        except Exception as e:
-            print(f"WebRTC Negotiation Error: {e}")
-            self.pcs.discard(pc)
-            
+                            
     async def send_sensor_data(self, websocket):
         """定期的にセンサー情報と画像をサーバーへ送信"""
         while True:
@@ -1925,6 +1815,65 @@ class RobotWebsocketClient:
         except Exception as e:
             await websocket.send(json.dumps({"type": "error", "message": str(e), "filename": filename}))
 
+#=========================================================
+# WebRTC用のビデオトラック (ROSカメラからの映像を提供)
+#=========================================================
+
+#==============================================================================
+# 画像配信クライアント
+#==============================================================================
+class ImageStreamClient:
+    def __init__(self, ros_node, robot_id, server_uri):
+        self.ros_node = ros_node
+        self.uri = f"{server_uri}video/{robot_id}"
+        self.quality = 30  # JPEG品質 (1-100)
+        self.target_width = 320
+
+    async def run(self):
+        while True:
+            try:
+                async with websockets.connect(self.uri) as websocket:
+                    print("Video Stream Connected")
+                    while True:
+                        # 1. 画像の取得（★ ロックの保持はコピーする一瞬だけに限定する ★）
+                        with image_lock:
+                            msg = latest_image_msg
+                            
+                        # msgがまだ無い場合は待機（★ ロックの外で待機する ★）
+                        if msg is None:
+                            await asyncio.sleep(0.1)
+                            continue
+                            
+                        # 2. 軽量化処理（★ 重い画像変換処理もロックの外で行う ★）
+                        try:
+                            # ROSメッセージ -> CV2
+                            cv_img = self.ros_node.bridge.imgmsg_to_cv2(msg, 'bgr8')
+                            cv_img = cv2.flip(cv_img, -1)
+                        except Exception as e:
+                            print(f"Image processing error: {e}")
+                            await asyncio.sleep(0.1)
+                            continue
+
+                        # リサイズ
+                        h, w = cv_img.shape[:2]
+                        scale = self.target_width / w
+                        cv_img = cv2.resize(cv_img, (int(w * scale), int(h * scale)))
+
+                        # JPEG圧縮 (バイナリ化)
+                        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), self.quality]
+                        result, encimg = cv2.imencode('.jpg', cv_img, encode_param)
+                        
+                        if result:
+                            # 3. 送信
+                            await websocket.send(encimg.tobytes())
+                        
+                        # CPU負荷を抑えるための微小な待機
+                        await asyncio.sleep(0.05) # 最大20fps程度に制限
+
+            except Exception as e:
+                print(f"Video Stream Error: {e}")
+                await asyncio.sleep(5) # 再接続待機
+                
 def run_ros_spin(node):
     """ROSイベントループを実行するスレッド関数"""
     print("ROS spin thread started.")
@@ -1962,19 +1911,24 @@ if __name__ == "__main__":
         script_manager=script_manager,
         robot_id=CURRENT_ROBOT_ID, # Configから読み込んだID
         server_uri=TARGET_URI
-    )
+        )
+    video_client = ImageStreamClient(
+            ros_node=ros_node, 
+            robot_id=CURRENT_ROBOT_ID, 
+            server_uri=TARGET_URI
+        )
      #  全ての非同期タスクを管理するエントリポイント
     async def main_loop():
         # WebSocketタスク
         ws_task = asyncio.create_task(client.run())
-        
+        video_task = asyncio.create_task(video_client.run())
         # FastAPIサーバー (uvicorn) タスク
         # host="0.0.0.0" にすることでLAN内の他PCからアクセス可能に
         config_uvicorn = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="info")
         server = uvicorn.Server(config_uvicorn)
         web_task = asyncio.create_task(server.serve())
         
-        await asyncio.gather(ws_task, web_task)
+        await asyncio.gather(ws_task, video_task, web_task)
         
         
     try:
