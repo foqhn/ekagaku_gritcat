@@ -92,27 +92,23 @@ async def video_endpoint(websocket: WebSocket, robot_id: str):
             if fe:
                 # 映像用フロントエンドにのみ転送
                 await fe.send_bytes(data)
+                print(f"Received video data from '{robot_id}' and forwarded to frontend.")
     except WebSocketDisconnect:
         conn["robot_vid"] = None
         print(f"Robot VID '{robot_id}' disconnected.")
 
 
 #--- WebSocket エンドポイント 映像用（FRONTEND） ---
-@app.websocket("/ws/robot/video/{robot_id}")
-async def video_endpoint(websocket: WebSocket, robot_id: str):
+@app.websocket("/ws/frontend/video/{robot_id}")
+async def websocket_frontend_video_endpoint(websocket: WebSocket, robot_id: str):
     await websocket.accept()
     conn = get_conn_dict(robot_id)
-    conn["robot_vid"] = websocket
+    conn["fe_vid"] = websocket
     try:
         while True:
-            data = await websocket.receive_bytes() # JPEGバイナリ
-            fe = conn.get("fe_vid")
-            if fe:
-                # 映像用フロントエンドにのみ転送
-                await fe.send_bytes(data)
+            await websocket.receive_text() # 通常フロントから送ることはないが維持のために待機
     except WebSocketDisconnect:
-        conn["robot_vid"] = None
-        print(f"Robot VID '{robot_id}' disconnected.")
+        conn["fe_vid"] = None
 
 #--- WebSocket コマンドエンドポイント (FRONTEND) ---
 @app.websocket("/ws/frontend/{robot_id}")
