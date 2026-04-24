@@ -7,13 +7,13 @@ export default defineConfig({
         proxy: {
             '/api': {
                 //target: 'https://ekagaku-robot.onrender.com',
-                target: 'http://192.168.11.14:8000',
+                target: 'http://192.168.11.127:8000',
                 changeOrigin: true,
                 secure: false,
             },
             '/ws': {
                 //target: 'wss://ekagaku-robot.onrender.com',
-                target: 'ws://192.168.11.14:8000',
+                target: 'ws://192.168.11.127:8000',
                 ws: true,
                 changeOrigin: true,
                 secure: false,

@@ -74,7 +74,7 @@ function App() {
     const fetchRobotList = async () => {
       try {
         // User requested to use the remote base URL directly
-        const resp = await fetch('http://192.168.11.14:8000/api/robots');
+        const resp = await fetch('http://192.168.11.127:8000/api/robots');
         if (!resp.ok) {
           throw new Error(`API Error: ${resp.status}`);
         }
@@ -109,10 +109,12 @@ function App() {
         if (payload && typeof payload === 'object') {
           if (payload.type === 'webrtc_answer') {
             // ロボットからのAnswerを受理
-            pcRef.current.setRemoteDescription(new RTCSessionDescription({
-              type: 'answer',
-              sdp: payload.sdp
-            }));
+            if (pcRef.current) {
+              pcRef.current.setRemoteDescription(new RTCSessionDescription({
+                type: 'answer',
+                sdp: payload.sdp
+              })).catch(e => console.error('Failed to set remote description:', e));
+            }
           }
           else if (payload.type === 'sensor_data') {
             const data = payload.data;
@@ -187,13 +189,19 @@ function App() {
     };
   }, []);
 
-  // カメラツールがアクティブになったときにWebRTCを開始
   useEffect(() => {
     if (activeTool === 'camera' && isConnected && !remoteStream) {
       startWebRTC();
     }
-  }, [activeTool, isConnected]);
+  }, [activeTool, isConnected, remoteStream]);
 
+  // ② WebRTCの停止
+  // ロボットとのWebSocket接続が切れたときのみクリーンアップする
+  useEffect(() => {
+    if (!isConnected) {
+      stopWebRTC();
+    }
+  }, [isConnected]);
   // Event handlers
   const handleToggleConnection = () => {
     if (isConnected) {
@@ -202,7 +210,7 @@ function App() {
       if (!selectedRobot) return;
       // User requested to use the remote base URL directly
       //const url = `wss://ekagaku-robot.onrender.com/ws/frontend/${selectedRobot}`;//リモート
-      const url = `ws://192.168.11.14:8000/ws/frontend/${selectedRobot}`;//ローカル
+      const url = `ws://192.168.11.127:8000/ws/frontend/${selectedRobot}`;//ローカル
       const newWs = new WebSocket(url);
       setConnectionStatus('Connecting...');
       newWs.onopen = () => {
@@ -371,8 +379,18 @@ function App() {
   const startWebRTC = async () => {
     if (!ws) return;
 
+    ws.send(JSON.stringify({ command: 'sensor', sensor_type: 'cam', bin: 1 }));
+    setSensorStates(prev => ({ ...prev, cam: true })); // UIもONにする
+
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      iceServers: [
+        { urls: ['stun:stun.l.google.com:19302', 'stun:219.94.244.174:3478'] }, // 保険としてgoogleも残す
+        {
+          urls: 'turn:219.94.244.174:3478',
+          username: 'catuser',
+          credential: 'catpassword'
+        }
+      ]
     });
 
     pc.ontrack = (event) => {
@@ -386,13 +404,39 @@ function App() {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
+    await new Promise((resolve) => {
+      if (pc.iceGatheringState === 'complete') {
+        resolve();
+      } else {
+        const checkState = () => {
+          if (pc.iceGatheringState === 'complete') {
+            pc.removeEventListener('icegatheringstatechange', checkState);
+            resolve();
+          }
+        };
+        pc.addEventListener('icegatheringstatechange', checkState);
+        // 万が一集まらない時のために、2秒で強制的に次に進む
+        setTimeout(resolve, 2000);
+      }
+    });
+
     // WebSocket経由でOfferをロボットに送る
     ws.send(JSON.stringify({
       command: 'webrtc_offer',
-      sdp: offer.sdp
+      sdp: pc.localDescription.sdp
     }));
 
     pcRef.current = pc;
+  };
+  const stopWebRTC = () => {
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    if (remoteStream) {
+      remoteStream.getTracks().forEach(track => track.stop());
+      setRemoteStream(null);
+    }
   };
 
   // UI rendering
