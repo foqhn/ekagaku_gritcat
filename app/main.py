@@ -684,7 +684,7 @@ class ScriptManager:
             self.stop_event.set()
             # スレッドに例外を注入して中断させる
             raise_keyboard_interrupt(self.execution_thread)
-            self.execution_thread.join(timeout=2)
+            self.execution_thread.join(timeout=4)
             
             # それでも止まらない場合の最終手段
             if self.execution_thread.is_alive():
@@ -694,6 +694,15 @@ class ScriptManager:
         # 安全のためモーター停止コマンドを送信
         self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
         self.stop_event.clear()
+
+    def _inject_system_exit(self):
+        """
+        最終手段としてSystemExitをスレッドに注入し、強制終了させる。
+        """
+        if self.execution_thread and self.execution_thread.is_alive():
+            tid = ctypes.c_long(self.execution_thread.ident)
+            ex_type = ctypes.py_object(SystemExit) 
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ex_type)
 
     def _run_script_thread(self, code_str):
         """実際にユーザースクリプトを実行するスレッド本体"""
