@@ -10,7 +10,8 @@ def get_wifi_info(interface='wlan0'):
     try:
         scan_output = subprocess.check_output(
             ['iwconfig', interface],
-            stderr=subprocess.STDOUT
+            stderr=subprocess.STDOUT,
+            timeout=1.5
         ).decode('utf-8')
 
         ssid_match = re.search(r'ESSID:"(.+?)"', scan_output)
