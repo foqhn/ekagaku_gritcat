@@ -1,53 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React from 'react';
 
 /**
- * カメラ映像を表示するコンポーネント (WebSocketバイナリ版)
- * @param {string} props.robotId - 接続するロボットのID
- * @param {string} props.serverIp - サーバーのIPとポート (例: "192.168.11.127:8000")
+ * 映像を表示するだけのコンポーネント
+ * @param {string} props.src - 表示する画像のURL (Blob URL)
+ * @param {boolean} props.isConnected - 映像ソケットの接続状態
  */
-const WebSocketCameraFeed = ({ robotId, serverIp }) => {
-    const [imageUrl, setImageUrl] = useState(null);
-    const [isConnected, setIsConnected] = useState(false);
-    const prevUrlRef = useRef(null);
-    const socketRef = useRef(null);
-
-    useEffect(() => {
-        if (!robotId || !serverIp) return;
-
-        // 映像専用のWebSocketに接続
-        const wsUrl = `ws://${serverIp}/ws/frontend/video/${robotId}`;
-        const ws = new WebSocket(wsUrl);
-        ws.binaryType = 'blob'; // バイナリ（Blob）として受け取る設定
-        socketRef.current = ws;
-
-        ws.onopen = () => setIsConnected(true);
-        ws.onclose = () => {
-            setIsConnected(false);
-            setImageUrl(null);
-        };
-
-        ws.onmessage = (event) => {
-            if (event.data instanceof Blob) {
-                // 受信したバイナリデータをURLに変換
-                const newUrl = URL.createObjectURL(event.data);
-
-                setImageUrl(newUrl);
-
-                // メモリリーク防止：古いURLオブジェクトを解放
-                if (prevUrlRef.current) {
-                    URL.revokeObjectURL(prevUrlRef.current);
-                }
-                prevUrlRef.current = newUrl;
-            }
-        };
-
-        // クリーンアップ：コンポーネント終了時にソケットを閉じる
-        return () => {
-            if (socketRef.current) socketRef.current.close();
-            if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
-        };
-    }, [robotId, serverIp]);
-
+const CameraFeed = ({ src, isConnected }) => {
     const containerStyle = {
         width: '100%',
         maxWidth: '640px',
@@ -64,32 +22,21 @@ const WebSocketCameraFeed = ({ robotId, serverIp }) => {
 
     return (
         <div>
-            <h2>Camera (WebSocket Stream)</h2>
+            <h2>Robot Camera Feed</h2>
             <div style={containerStyle}>
-                {imageUrl ? (
+                {src ? (
                     <img
-                        src={imageUrl}
-                        alt="Robot Feed"
-                        style={{
-                            width: '100%',
-                            height: 'auto',
-                            display: 'block'
-                        }}
+                        src={src}
+                        alt="Robot View"
+                        style={{ width: '100%', height: 'auto', display: 'block' }}
                     />
                 ) : (
-                    <div>
-                        {isConnected ? "Loading Frames..." : "Waiting for Video Socket..."}
-                    </div>
+                    <div>{isConnected ? "Loading Frames..." : "Video Disconnected"}</div>
                 )}
 
-                {/* 接続状態のインジケーター（任意） */}
                 <div style={{
-                    position: 'absolute',
-                    top: '10px',
-                    right: '10px',
-                    fontSize: '12px',
-                    padding: '4px 8px',
-                    borderRadius: '4px',
+                    position: 'absolute', top: '10px', right: '10px',
+                    fontSize: '12px', padding: '4px 8px', borderRadius: '4px',
                     backgroundColor: isConnected ? 'green' : 'red'
                 }}>
                     {isConnected ? 'LIVE' : 'OFFLINE'}
@@ -99,4 +46,4 @@ const WebSocketCameraFeed = ({ robotId, serverIp }) => {
     );
 };
 
-export default WebSocketCameraFeed;
+export default CameraFeed;

@@ -51,9 +51,11 @@ function App() {
   // Control state
   const [speed, setSpeed] = useState(50);
 
-  //WebRTC state
-  const pcRef = useRef(null);
-  const [remoteStream, setRemoteStream] = useState(null);
+  // --- WebSocket 2: 映像ストリーム用 (新規追加) ---
+  const [videoSrc, setVideoSrc] = useState(null);
+  const [isVideoConnected, setIsVideoConnected] = useState(false);
+  const videoWsRef = useRef(null);
+  const prevUrlRef = useRef(null); // メモリ解放用
 
   // System logs
   const [consoleLogs, setConsoleLogs] = useState([
@@ -108,16 +110,7 @@ function App() {
       try {
         const payload = JSON.parse(event.data);
         if (payload && typeof payload === 'object') {
-          if (payload.type === 'webrtc_answer') {
-            // ロボットからのAnswerを受理
-            if (pcRef.current) {
-              pcRef.current.setRemoteDescription(new RTCSessionDescription({
-                type: 'answer',
-                sdp: payload.sdp
-              })).catch(e => console.error('Failed to set remote description:', e));
-            }
-          }
-          else if (payload.type === 'sensor_data') {
+          if (payload.type === 'sensor_data') {
             const data = payload.data;
 
             // Helper to handle sensor data updates
@@ -191,18 +184,50 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (activeTool === 'camera' && isConnected && !remoteStream) {
-      startWebRTC();
-    }
-  }, [activeTool, isConnected, remoteStream]);
+    // 接続条件: ロボットが選択され、メインWSが繋がっており、カメラ画面を開いている時
+    if (isConnected && activeTool === 'camera' && selectedRobot) {
+      const url = `ws://192.168.11.127:8000/ws/frontend/video/${selectedRobot}`;
+      const vWs = new WebSocket(url);
+      vWs.binaryType = 'blob';
+      videoWsRef.current = vWs;
 
-  // ② WebRTCの停止
-  // ロボットとのWebSocket接続が切れたときのみクリーンアップする
-  useEffect(() => {
-    if (!isConnected) {
-      stopWebRTC();
+      vWs.onopen = () => setIsVideoConnected(true);
+      vWs.onmessage = (event) => {
+        console.log("video");
+        if (event.data instanceof Blob) {
+          const newUrl = URL.createObjectURL(event.data);
+          setVideoSrc(newUrl);
+
+          // 古いURLを解放してブラウザのクラッシュを防ぐ
+          if (prevUrlRef.current) {
+            URL.revokeObjectURL(prevUrlRef.current);
+          }
+          prevUrlRef.current = newUrl;
+        }
+      };
+      vWs.onclose = () => {
+        setIsVideoConnected(false);
+        setVideoSrc(null);
+      };
+
+      return () => {
+        vWs.close();
+        if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
+      };
+    } else {
+      // カメラ画面を閉じたり切断したりした場合はソケットを閉じる
+      if (videoWsRef.current) {
+        videoWsRef.current.close();
+        videoWsRef.current = null;
+      }
+      setIsVideoConnected(false);
+      setVideoSrc(null);
     }
-  }, [isConnected]);
+  }, [isConnected, activeTool, selectedRobot]);
+
+
+
+
   // Event handlers
   const handleToggleConnection = () => {
     if (isConnected) {
@@ -216,7 +241,6 @@ function App() {
       setConnectionStatus('Connecting...');
       newWs.onopen = () => {
         setConnectionStatus(`Connected: ${selectedRobot}`);
-        addLog(`Connected to ${selectedRobot}`, 'success');
         addLog(`Connected to ${selectedRobot}`, 'success');
         setWs(newWs);
 
@@ -376,69 +400,7 @@ function App() {
     reader.readAsText(file);
     e.target.value = null; // Reset input
   };
-  // WebRTC接続を開始する関数
-  const startWebRTC = async () => {
-    if (!ws) return;
 
-    ws.send(JSON.stringify({ command: 'sensor', sensor_type: 'cam', bin: 1 }));
-    setSensorStates(prev => ({ ...prev, cam: true })); // UIもONにする
-
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: ['stun:stun.l.google.com:19302', 'stun:219.94.244.174:3478'] }, // 保険としてgoogleも残す
-        {
-          urls: 'turn:219.94.244.174:3478',
-          username: 'catuser',
-          credential: 'catpassword'
-        }
-      ]
-    });
-
-    pc.ontrack = (event) => {
-      console.log("Track received:", event.streams[0]);
-      setRemoteStream(event.streams[0]);
-    };
-
-    // メディアの受信設定
-    pc.addTransceiver('video', { direction: 'recvonly' });
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    await new Promise((resolve) => {
-      if (pc.iceGatheringState === 'complete') {
-        resolve();
-      } else {
-        const checkState = () => {
-          if (pc.iceGatheringState === 'complete') {
-            pc.removeEventListener('icegatheringstatechange', checkState);
-            resolve();
-          }
-        };
-        pc.addEventListener('icegatheringstatechange', checkState);
-        // 万が一集まらない時のために、2秒で強制的に次に進む
-        setTimeout(resolve, 2000);
-      }
-    });
-
-    // WebSocket経由でOfferをロボットに送る
-    ws.send(JSON.stringify({
-      command: 'webrtc_offer',
-      sdp: pc.localDescription.sdp
-    }));
-
-    pcRef.current = pc;
-  };
-  const stopWebRTC = () => {
-    if (pcRef.current) {
-      pcRef.current.close();
-      pcRef.current = null;
-    }
-    if (remoteStream) {
-      remoteStream.getTracks().forEach(track => track.stop());
-      setRemoteStream(null);
-    }
-  };
 
   // UI rendering
   return (
@@ -560,7 +522,7 @@ function App() {
                 {/* Left Column */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                   <div className="panel-container">
-                    <WebSocketCameraFeed robotId={selectedRobot} serverIp={'192.168.11.127:8000'} />
+                    <WebSocketCameraFeed src={videoSrc} isConnected={isVideoConnected} />
                   </div>
                   <div className="panel-container" style={{ padding: '20px' }}>
                     <h3 style={{ marginTop: 0, marginBottom: '16px', color: '#94a3b8' }}>Manual Control</h3>
