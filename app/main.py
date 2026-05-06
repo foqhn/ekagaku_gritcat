@@ -667,6 +667,7 @@ class ScriptManager:
             return
 
         print(">>> Starting User Program >>>")
+        self.is_stopping = False
         self.stop_event.clear()
         
         with open(self.script_path, "r", encoding="utf-8") as f:
@@ -683,23 +684,32 @@ class ScriptManager:
     def stop_program(self):
         """実行中のプログラムを強制停止"""
         if self.execution_thread and self.execution_thread.is_alive():
-            print(">>> Sending KeyboardInterrupt to User Script... >>>")
-            self.stop_event.set()
-            # スレッドに例外を注入して中断させる
-            raise_keyboard_interrupt(self.execution_thread)
+            if getattr(self, 'is_stopping', False):
+                return
+            self.is_stopping = True
             
-            # asyncioのイベントループをブロックしないよう、
-            # 別スレッドで終了を監視
+            print(">>> Requesting User Script to stop gracefully... >>>")
+            self.stop_event.set()
+            
+            # asyncioのイベントループをブロックしないよう、別スレッドで終了を監視
             def watchdog(target_thread):
-                target_thread.join(timeout=6.0)
+                # 1秒待機し、それでも終了しなければKeyboardInterruptを注入
+                target_thread.join(timeout=1.0)
                 if target_thread.is_alive():
-                    print("Warning: Script is stubborn. It might be catching KeyboardInterrupt or blocking in C.")
+                    print(">>> Script is stubborn. Injecting KeyboardInterrupt... >>>")
+                    raise_keyboard_interrupt(target_thread)
+                    
+                    target_thread.join(timeout=5.0)
+                    if target_thread.is_alive():
+                        print("Warning: Script is STILL stubborn. Blocking in C?")
+                
+                self.is_stopping = False
             
             threading.Thread(target=watchdog, args=(self.execution_thread,), daemon=True).start()
 
         # 安全のためモーター停止コマンドを送信
         self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
-        self.stop_event.clear()
+        # stop_event.clear() はここでは行わず、次回のstart_program()で行う
 
     def _run_script_thread(self, code_str):
         """実際にユーザースクリプトを実行するスレッド本体"""
