@@ -70,6 +70,11 @@ gps_lock = threading.Lock()
 system_info_lock = threading.Lock()
 bme_lock = threading.Lock()
 debug_image_lock = threading.Lock() 
+oled_lock = threading.Lock()
+
+# C-APIの設定 (非同期例外注入時のクラッシュ・セグフォ防止)
+ctypes.pythonapi.PyThreadState_SetAsyncExc.argtypes = [ctypes.c_long, ctypes.py_object]
+ctypes.pythonapi.PyThreadState_SetAsyncExc.restype = ctypes.c_int
 
 command_queue = queue.Queue()
 shutdown_event = threading.Event() 
@@ -117,58 +122,59 @@ def update_oled(text_lines=None, mode=None, clear=False, start_x=0, start_y=0, l
     OLEDディスプレイの表示を一元管理する関数。
     """
     try:
-        if clear:
-            oled.clear()
-            if text_lines is None and mode is None:
-                return
+        with oled_lock:
+            if clear:
+                oled.clear()
+                if text_lines is None and mode is None:
+                    return
 
-        if mode:
-            display_lines = []
-            display_lines.append(f"ID : {CURRENT_ROBOT_ID}")
-            if mode == "connection":
-                ssid, strength = get_wifi_info()
-                if ssid:
-                    display_lines.append(f"Wi-Fi: {ssid[:12]}") 
-                    display_lines.append(f"Signal: {strength} dBm")
-                else:
-                    display_lines.append("Wi-Fi: Disconnected")
+            if mode:
+                display_lines = []
+                display_lines.append(f"ID : {CURRENT_ROBOT_ID}")
+                if mode == "connection":
+                    ssid, strength = get_wifi_info()
+                    if ssid:
+                        display_lines.append(f"Wi-Fi: {ssid[:12]}") 
+                        display_lines.append(f"Signal: {strength} dBm")
+                    else:
+                        display_lines.append("Wi-Fi: Disconnected")
 
-            elif mode == "custom":
-                if text_lines is not None:
-                    if isinstance(text_lines, list):
-                        display_lines.extend(text_lines)
+                elif mode == "custom":
+                    if text_lines is not None:
+                        if isinstance(text_lines, list):
+                            display_lines.extend(text_lines)
+                        else:
+                            display_lines.append(text_lines)
+                elif mode == "error":
+                    display_lines.append("Error occurred!")
+                    if text_lines is not None:
+                        if isinstance(text_lines, list):
+                            display_lines.extend(text_lines)
+                        else:
+                            display_lines.append(text_lines)
+                elif mode == "info":
+                    if text_lines is not None:
+                        if isinstance(text_lines, list):
+                            display_lines.extend(text_lines)
+                        else:
+                            display_lines.append(text_lines)
                     else:
-                        display_lines.append(text_lines)
-            elif mode == "error":
-                display_lines.append("Error occurred!")
-                if text_lines is not None:
-                    if isinstance(text_lines, list):
-                        display_lines.extend(text_lines)
+                        display_lines.append("debug info")
+                    
+                    oled.display_text(display_lines, start_x=0, start_y=0, line_spacing=12)
+                    time.sleep(3)  # 情報表示は3秒間表示してから通常画面に戻す
+                    display_lines = []  # 画面をクリア
+                    ssid, strength = get_wifi_info()
+                    if ssid:
+                        display_lines.append(f"ID : {CURRENT_ROBOT_ID}")
+                        display_lines.append(f"Wi-Fi: {ssid[:12]}") 
+                        display_lines.append(f"Signal: {strength} dBm")
                     else:
-                        display_lines.append(text_lines)
-            elif mode == "info":
-                if text_lines is not None:
-                    if isinstance(text_lines, list):
-                        display_lines.extend(text_lines)
-                    else:
-                        display_lines.append(text_lines)
-                else:
-                    display_lines.append("debug info")
+                        display_lines.append("Wi-Fi: Disconnected")
                 
                 oled.display_text(display_lines, start_x=0, start_y=0, line_spacing=12)
-                time.sleep(3)  # 情報表示は3秒間表示してから通常画面に戻す
-                display_lines = []  # 画面をクリア
-                ssid, strength = get_wifi_info()
-                if ssid:
-                    display_lines.append(f"ID : {CURRENT_ROBOT_ID}")
-                    display_lines.append(f"Wi-Fi: {ssid[:12]}") 
-                    display_lines.append(f"Signal: {strength} dBm")
-                else:
-                    display_lines.append("Wi-Fi: Disconnected")
-            
-            oled.display_text(display_lines, start_x=0, start_y=0, line_spacing=12)
-        elif text_lines is not None:
-            oled.display_text(text_lines, start_x=start_x, start_y=start_y, line_spacing=line_spacing)
+            elif text_lines is not None:
+                oled.display_text(text_lines, start_x=start_x, start_y=start_y, line_spacing=line_spacing)
 
     except Exception as e:
         print(f"OLED Error: {e}")
@@ -188,9 +194,6 @@ def raise_keyboard_interrupt(thread_obj):
     res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ex_type)
     if res == 0:
         print("Error: Invalid thread ID")
-    elif res > 1:
-        # 意図しない影響が出た場合は取り消し
-        ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None)
 
 def force_kill_os_process(pattern):
     """
