@@ -689,14 +689,11 @@ class ScriptManager:
             raise_keyboard_interrupt(self.execution_thread)
             
             # asyncioのイベントループをブロックしないよう、
-            # 別スレッドで終了を監視し、止まらない場合のみSystemExitを注入
+            # 別スレッドで終了を監視
             def watchdog(target_thread):
-                target_thread.join(timeout=4.0)
+                target_thread.join(timeout=6.0)
                 if target_thread.is_alive():
-                    print("Warning: Script is stubborn. SystemExit injection.")
-                    tid = ctypes.c_long(target_thread.ident)
-                    ex_type = ctypes.py_object(SystemExit) 
-                    ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ex_type)
+                    print("Warning: Script is stubborn. It might be catching KeyboardInterrupt or blocking in C.")
             
             threading.Thread(target=watchdog, args=(self.execution_thread,), daemon=True).start()
 
