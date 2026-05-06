@@ -1,7 +1,7 @@
 {
-    "robot_id": "robot07",
+    "robot_id": "robot03",
     "server_ip": "192.168.11.127",
-    "server_url": "wss://ekagaku-robot.onrender.com/ws/robot/",
+    "server_url": "wss://gritcat.e-kagaku.com/ws/robot/",
     "server_port": 8000,
     "operation_mode": "remote"
 }
