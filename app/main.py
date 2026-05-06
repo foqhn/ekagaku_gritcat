@@ -112,41 +112,63 @@ def build_target_uri(conf):
         port = conf.get("server_port", 8000)
         return f"ws://{ip}:{port}/ws/robot/{conf.get('robot_id')}"
     
-def show_status_display(mode="connection", text_lines_add=None):
+def update_oled(text_lines=None, mode=None, clear=False, start_x=0, start_y=0, line_spacing=12):
     """
-    待機画面（ロボットIDとWi-Fi接続情報）をOLEDに表示する関数。
-    プログラム停止時や起動時に呼び出される。
+    OLEDディスプレイの表示を一元管理する関数。
     """
     try:
-        text_lines = []
-        text_lines.append(f"ID : {CURRENT_ROBOT_ID}")
-        if mode == "connection":
-            ssid, strength = get_wifi_info()
-            if ssid:
-                text_lines.append(f"Wi-Fi: {ssid[:12]}") 
-                text_lines.append(f"Signal: {strength} dBm")
-            else:
-                text_lines.append("Wi-Fi: Disconnected")
+        if clear:
+            oled.clear()
+            if text_lines is None and mode is None:
+                return
 
-        elif mode == "custom" and text_lines_add is not None:
-            text_lines.extend(text_lines_add)
-        elif mode == "error":
-            text_lines.append("Error occurred!")
-            text_lines.append(text_lines_add if text_lines_add else "")
-        elif mode == "info":
-            text_lines.append(text_lines_add if text_lines_add else "debug info")
-            oled.display_text(text_lines, start_x=0, start_y=0, line_spacing=12)
-            time.sleep(3)  # 情報表示は3秒間表示してから通常画面に戻す
-            text_lines = []  # 画面をクリア
-            ssid, strength = get_wifi_info()
-            if ssid:
-                text_lines.append(f"ID : {CURRENT_ROBOT_ID}")
-                text_lines.append(f"Wi-Fi: {ssid[:12]}") 
-                text_lines.append(f"Signal: {strength} dBm")
-            else:
-                text_lines.append("Wi-Fi: Disconnected")
+        if mode:
+            display_lines = []
+            display_lines.append(f"ID : {CURRENT_ROBOT_ID}")
+            if mode == "connection":
+                ssid, strength = get_wifi_info()
+                if ssid:
+                    display_lines.append(f"Wi-Fi: {ssid[:12]}") 
+                    display_lines.append(f"Signal: {strength} dBm")
+                else:
+                    display_lines.append("Wi-Fi: Disconnected")
+
+            elif mode == "custom":
+                if text_lines is not None:
+                    if isinstance(text_lines, list):
+                        display_lines.extend(text_lines)
+                    else:
+                        display_lines.append(text_lines)
+            elif mode == "error":
+                display_lines.append("Error occurred!")
+                if text_lines is not None:
+                    if isinstance(text_lines, list):
+                        display_lines.extend(text_lines)
+                    else:
+                        display_lines.append(text_lines)
+            elif mode == "info":
+                if text_lines is not None:
+                    if isinstance(text_lines, list):
+                        display_lines.extend(text_lines)
+                    else:
+                        display_lines.append(text_lines)
+                else:
+                    display_lines.append("debug info")
+                
+                oled.display_text(display_lines, start_x=0, start_y=0, line_spacing=12)
+                time.sleep(3)  # 情報表示は3秒間表示してから通常画面に戻す
+                display_lines = []  # 画面をクリア
+                ssid, strength = get_wifi_info()
+                if ssid:
+                    display_lines.append(f"ID : {CURRENT_ROBOT_ID}")
+                    display_lines.append(f"Wi-Fi: {ssid[:12]}") 
+                    display_lines.append(f"Signal: {strength} dBm")
+                else:
+                    display_lines.append("Wi-Fi: Disconnected")
             
-        oled.display_text(text_lines, start_x=0, start_y=0, line_spacing=12)
+            oled.display_text(display_lines, start_x=0, start_y=0, line_spacing=12)
+        elif text_lines is not None:
+            oled.display_text(text_lines, start_x=start_x, start_y=start_y, line_spacing=line_spacing)
 
     except Exception as e:
         print(f"OLED Error: {e}")
@@ -424,7 +446,7 @@ class RobotController:
                 lines = [str(x) for x in message]
             else:
                 lines = str(message).split('\n')
-            oled.display_text(lines, start_x=0, start_y=0, line_spacing=15)
+            update_oled(text_lines=lines, start_x=0, start_y=0, line_spacing=15)
         except Exception as e:
             print(f"[OLED Error]: {e}")
 
@@ -687,14 +709,14 @@ class ScriptManager:
         }
         try:
             print(">>> User Script Started >>>")
-            oled.display_text(["", "   Program", "   Running...", ""], start_x=5, start_y=5, line_spacing=15)
+            update_oled(text_lines=["", "   Program", "   Running...", ""], start_x=5, start_y=5, line_spacing=15)
             # 文字列として渡されたPythonコードを実行
             exec(code_str, {}, local_scope)
             print("<<< User Script Finished Normally <<<")
 
         except KeyboardInterrupt:
             print("\n!!! User Script Interrupted by System (Stop Command) !!!")
-            oled.display_text(["", "   STOPPED", "", ""], start_x=5, start_y=5)
+            update_oled(text_lines=["", "   STOPPED", "", ""], start_x=5, start_y=5)
             time.sleep(1.0) 
 
         except SyntaxError as e:
@@ -708,7 +730,7 @@ class ScriptManager:
         finally:
             print("--- Safety Cleanup: Stopping Motors ---")
             robot.stop()
-            show_status_display()
+            update_oled(mode="connection")
 
     def check_button(self):
         """
@@ -747,8 +769,7 @@ class ScriptManager:
                     if elapsed >= 3.0 and not flag_3s:
                         flag_3s = True
                         self._beep(0.1) # 「ピッ」と短く鳴らす
-                        oled.clear()
-                        oled.display_text(["", " Release to", " RESTART", ""], start_x=5, start_y=5)
+                        update_oled(text_lines=["", " Release to", " RESTART", ""], clear=True, start_x=5, start_y=5)
                     
                     # --- 8秒経過: 「シャットダウン」発動 ---
                     if elapsed >= 8.0:
@@ -776,7 +797,7 @@ class ScriptManager:
                         # ボタンが完全に離されるのを待つ
                         self._wait_for_release(15)
                         # ステータス表示に戻す
-                        show_status_display()
+                        update_oled(mode="connection")
 
         except Exception as e:
             print(f"Button Check Error: {e}")
@@ -801,8 +822,7 @@ class ScriptManager:
         self.stop_program()
         
         # 2. ディスプレイに通知
-        oled.clear()
-        oled.display_text(["", "  SYSTEM", "  RESTARTING...", ""], start_x=0, start_y=0)
+        update_oled(text_lines=["", "  SYSTEM", "  RESTARTING...", ""], clear=True, start_x=0, start_y=0)
         
         # 3. モーターの安全停止
         self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
@@ -833,8 +853,7 @@ class ScriptManager:
         self.stop_program()
         
         # 2. ディスプレイに通知
-        oled.clear()
-        oled.display_text(["", "  SHUTTING DOWN", "  PLEASE WAIT...", ""], start_x=0, start_y=0)
+        update_oled(text_lines=["", "  SHUTTING DOWN", "  PLEASE WAIT...", ""], clear=True, start_x=0, start_y=0)
         
         # 3. モーターの安全停止（念押し）
         self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
@@ -994,7 +1013,7 @@ class RosSubscriberNode(Node):
                     sensor_type = command_data.get("sensor_type")
                     bin_val = int(command_data.get("bin"))
                     self.sensor_ctl(sensor_type, bin_val)
-                    show_status_display(mode="info", text_lines_add=[f"{sensor_type.capitalize()}:", f"{'Started' if bin_val else 'Stopped'}"]) # ステータス表示更新
+                    update_oled(mode="info", text_lines=[f"{sensor_type.capitalize()}:", f"{'Started' if bin_val else 'Stopped'}"]) # ステータス表示更新
 
                 elif command == "log":
                     # ログ記録の開始/停止
@@ -1634,10 +1653,9 @@ class RobotWebsocketClient:
                     # 接続成功後の処理
                     print(f"Connected to server: {self.uri}")
                     # oledに接続成功を表示
-                    oled.clear()
-                    oled.display_text(["", "Connected!", "", ""], start_x=5, start_y=5)
+                    update_oled(text_lines=["", "Connected!", "", ""], clear=True, start_x=5, start_y=5)
                     await asyncio.sleep(2) # 2秒表示してから通常のステータス表示に戻す
-                    show_status_display()
+                    update_oled(mode="connection")
                     listen_task = asyncio.create_task(self.listen_for_commands(websocket))
                     send_task = asyncio.create_task(self.send_sensor_data(websocket))
                     
@@ -1658,8 +1676,7 @@ class RobotWebsocketClient:
             except Exception as e:
                 print(f"Connection failed: {e}. Retrying in 20 seconds...")
                 #oledに接続失敗を表示
-                oled.clear()
-                oled.display_text(["", "Connection Failed!", "Retrying...", ""], start_x=5, start_y=5)
+                update_oled(text_lines=["", "Connection Failed!", "Retrying...", ""], clear=True, start_x=5, start_y=5)
                 await asyncio.sleep(20) # 5秒待ってリトライ
             
             
@@ -1717,8 +1734,7 @@ class RobotWebsocketClient:
                         # 1. 設定ファイルに保存
                         if ConfigManager.update_robot_id(new_id):
                             # 2. ユーザーに通知 (OLED & ログ)
-                            oled.clear()
-                            oled.display_text(["", "ID CHANGED!", f"-> {new_id}", "Rebooting..."], start_x=0, start_y=0)
+                            update_oled(text_lines=["", "ID CHANGED!", f"-> {new_id}", "Rebooting..."], clear=True, start_x=0, start_y=0)
                             
                             # サーバーに成功レスポンスを返す（切断前に）
                             await websocket.send(json.dumps({
@@ -2010,6 +2026,6 @@ if __name__ == "__main__":
             if 'client' in locals() and hasattr(client, 'bme280') and client.bme280:
                 client.bme280.close()
         except Exception: pass
-        oled.clear()
+        update_oled(clear=True)
         
         print("Application has exited.")
