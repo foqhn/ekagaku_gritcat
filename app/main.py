@@ -1245,7 +1245,7 @@ class RosSubscriberNode(Node):
             alt = 403.0 if is_no_fix else gps_msg.altitude
             row.extend([gps_msg.status.status, lat, lon, alt])
         else:
-            row.extend([None, None, None, None])
+            row.extend([-1, 403.0, 403.0, 403.0])
         
         if bme_data:
             row.append(bme_data.get('temperature'))
@@ -1330,7 +1330,16 @@ def imu_to_dict(imu_msg: Imu):
     }
 
 def gps_to_dict(gps_msg: NavSatFix):
-    if not gps_msg: return None
+    if not gps_msg:
+        return {
+            'header': {'stamp': {'sec': 0, 'nanosec': 0}, 'frame_id': 'no_gps'},
+            'status': {'status': -1, 'service': 0},
+            'latitude': 403.0,
+            'longitude': 403.0,
+            'altitude': 403.0,
+            'position_covariance': [0.0]*9,
+            'position_covariance_type': 0
+        }
     
     is_no_fix = (gps_msg.status.status == -1) or math.isnan(gps_msg.latitude)
     lat = 403.0 if is_no_fix else gps_msg.latitude
@@ -1933,8 +1942,7 @@ class RobotWebsocketClient:
                     'header': {'stamp': {'sec': mag_msg.header.stamp.sec, 'nanosec': mag_msg.header.stamp.nanosec}, 'frame_id': mag_msg.header.frame_id},
                     'magnetic_field': {'x': mag_msg.magnetic_field.x, 'y': mag_msg.magnetic_field.y, 'z': mag_msg.magnetic_field.z}
                 }
-            if gps_msg:
-                payload["data"]["gps"] = gps_to_dict(gps_msg)
+            payload["data"]["gps"] = gps_to_dict(gps_msg)
             
             if bme_read: payload["data"]["bme280"] = bme280_to_dict(bme_read)
             else: payload["data"]["bme280"] = None
