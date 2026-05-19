@@ -439,6 +439,14 @@ function App() {
     }
   };
 
+  const handleRefreshVideo = () => {
+    addLog('Refreshing video stream...', 'warning');
+    stopWebRTC();
+    setTimeout(() => {
+      startWebRTC();
+    }, 500);
+  };
+
   // UI rendering
   return (
     <div className="app-root">
@@ -559,6 +567,16 @@ function App() {
                 {/* Left Column */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                   <div className="panel-container">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <h3 style={{ margin: 0, color: '#94a3b8' }}>Camera View</h3>
+                      <button
+                        onClick={handleRefreshVideo}
+                        style={{ padding: '4px 8px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                        title="映像がフリーズしたときに再接続します"
+                      >
+                        🔄
+                      </button>
+                    </div>
                     <CameraFeed stream={remoteStream} />
                   </div>
                   <div className="panel-container" style={{ padding: '20px' }}>
