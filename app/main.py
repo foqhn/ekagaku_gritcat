@@ -1239,7 +1239,11 @@ class RosSubscriberNode(Node):
 
         row.extend([mag_msg.magnetic_field.x, mag_msg.magnetic_field.y, mag_msg.magnetic_field.z] if mag_msg else [None, None, None])
         if gps_msg:
-            row.extend([gps_msg.status.status, gps_msg.latitude, gps_msg.longitude, gps_msg.altitude])
+            is_no_fix = (gps_msg.status.status == -1) or math.isnan(gps_msg.latitude)
+            lat = 403.0 if is_no_fix else gps_msg.latitude
+            lon = 403.0 if is_no_fix else gps_msg.longitude
+            alt = 403.0 if is_no_fix else gps_msg.altitude
+            row.extend([gps_msg.status.status, lat, lon, alt])
         else:
             row.extend([None, None, None, None])
         
@@ -1327,6 +1331,12 @@ def imu_to_dict(imu_msg: Imu):
 
 def gps_to_dict(gps_msg: NavSatFix):
     if not gps_msg: return None
+    
+    is_no_fix = (gps_msg.status.status == -1) or math.isnan(gps_msg.latitude)
+    lat = 403.0 if is_no_fix else gps_msg.latitude
+    lon = 403.0 if is_no_fix else gps_msg.longitude
+    alt = 403.0 if is_no_fix else gps_msg.altitude
+
     return {
         'header': {
             'stamp': {'sec': gps_msg.header.stamp.sec, 'nanosec': gps_msg.header.stamp.nanosec},
@@ -1336,9 +1346,9 @@ def gps_to_dict(gps_msg: NavSatFix):
             'status': gps_msg.status.status,
             'service': gps_msg.status.service
         },
-        'latitude': gps_msg.latitude,
-        'longitude': gps_msg.longitude,
-        'altitude': gps_msg.altitude,
+        'latitude': lat,
+        'longitude': lon,
+        'altitude': alt,
         'position_covariance': list(gps_msg.position_covariance),
         'position_covariance_type': gps_msg.position_covariance_type
     }
