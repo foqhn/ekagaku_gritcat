@@ -1177,7 +1177,7 @@ class RosSubscriberNode(Node):
                     "ang_vel_x", "ang_vel_y", "ang_vel_z", 
                     "lin_accel_x", "lin_accel_y", "lin_accel_z",
                     "mag_x", "mag_y", "mag_z",
-                    "gps_status", "latitude", "longitude", "altitude",
+                    "gps_status", "latitude", "longitude", "altitude", "gps_h_err", "gps_v_err",
                     "temperature_celsius", "pressure_hpa", "humidity_percent",
                     "wifi_ssid", "wifi_signal_strength",
                     "cpu_temperature"
@@ -1243,9 +1243,21 @@ class RosSubscriberNode(Node):
             lat = 403.0 if is_no_fix else gps_msg.latitude
             lon = 403.0 if is_no_fix else gps_msg.longitude
             alt = 403.0 if is_no_fix else gps_msg.altitude
-            row.extend([gps_msg.status.status, lat, lon, alt])
+            
+            h_err = 403.0
+            v_err = 403.0
+            if not is_no_fix and len(gps_msg.position_covariance) == 9:
+                cov_e = gps_msg.position_covariance[0]
+                cov_n = gps_msg.position_covariance[4]
+                cov_u = gps_msg.position_covariance[8]
+                if cov_e >= 0 and cov_n >= 0:
+                    h_err = math.sqrt(cov_e + cov_n)
+                if cov_u >= 0:
+                    v_err = math.sqrt(cov_u)
+            
+            row.extend([gps_msg.status.status, lat, lon, alt, h_err, v_err])
         else:
-            row.extend([-1, 403.0, 403.0, 403.0])
+            row.extend([-1, 403.0, 403.0, 403.0, 403.0, 403.0])
         
         if bme_data:
             row.append(bme_data.get('temperature'))
@@ -1337,6 +1349,8 @@ def gps_to_dict(gps_msg: NavSatFix):
             'latitude': 403.0,
             'longitude': 403.0,
             'altitude': 403.0,
+            'h_err': 403.0,
+            'v_err': 403.0,
             'position_covariance': [0.0]*9,
             'position_covariance_type': 0
         }
@@ -1345,6 +1359,17 @@ def gps_to_dict(gps_msg: NavSatFix):
     lat = 403.0 if is_no_fix else gps_msg.latitude
     lon = 403.0 if is_no_fix else gps_msg.longitude
     alt = 403.0 if is_no_fix else gps_msg.altitude
+
+    h_err = 403.0
+    v_err = 403.0
+    if not is_no_fix and len(gps_msg.position_covariance) == 9:
+        cov_e = gps_msg.position_covariance[0]
+        cov_n = gps_msg.position_covariance[4]
+        cov_u = gps_msg.position_covariance[8]
+        if cov_e >= 0 and cov_n >= 0:
+            h_err = math.sqrt(cov_e + cov_n)
+        if cov_u >= 0:
+            v_err = math.sqrt(cov_u)
 
     return {
         'header': {
@@ -1358,6 +1383,8 @@ def gps_to_dict(gps_msg: NavSatFix):
         'latitude': lat,
         'longitude': lon,
         'altitude': alt,
+        'h_err': h_err,
+        'v_err': v_err,
         'position_covariance': list(gps_msg.position_covariance),
         'position_covariance_type': gps_msg.position_covariance_type
     }
