@@ -1222,18 +1222,21 @@ class RosSubscriberNode(Node):
         with bme_lock:
             if latest_bme_data: bme_data = latest_bme_data.copy()
 
-        if not imu_msg: return
-        q = imu_msg.orientation
-        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-        compass = (90.0 - math.degrees(yaw)) % 360.0
-        # データの構築
-        row = [
-            time.time(), time.datetime.now().isoformat(), 
-            imu_msg.orientation.x, imu_msg.orientation.y, imu_msg.orientation.z, imu_msg.orientation.w,
-            compass,
-            imu_msg.angular_velocity.x, imu_msg.angular_velocity.y, imu_msg.angular_velocity.z, 
-            imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z
-        ]
+        row = [time.time(), datetime.now().isoformat()]
+
+        if imu_msg:
+            q = imu_msg.orientation
+            yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+            compass = (90.0 - math.degrees(yaw)) % 360.0
+            row.extend([
+                imu_msg.orientation.x, imu_msg.orientation.y, imu_msg.orientation.z, imu_msg.orientation.w,
+                compass,
+                imu_msg.angular_velocity.x, imu_msg.angular_velocity.y, imu_msg.angular_velocity.z, 
+                imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z
+            ])
+        else:
+            row.extend([None] * 11)
+
         row.extend([mag_msg.magnetic_field.x, mag_msg.magnetic_field.y, mag_msg.magnetic_field.z] if mag_msg else [None, None, None])
         if gps_msg:
             row.extend([gps_msg.status.status, gps_msg.latitude, gps_msg.longitude, gps_msg.altitude])
@@ -1250,7 +1253,9 @@ class RosSubscriberNode(Node):
         row.append(system_info.get('wifi_ssid'))
         row.append(system_info.get('wifi_strength'))
         row.append(system_info.get('cpu_temp')) 
+        
         self.csv_writer.writerow(row)
+        self.log_file.flush()
         
         
 
