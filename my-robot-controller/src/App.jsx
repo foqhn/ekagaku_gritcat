@@ -439,12 +439,32 @@ function App() {
     }
   };
 
+  // "F5相当"のリロードボタン: WebRTCだけ再送せず、状態をリセットする
   const handleRefreshVideo = () => {
-    addLog('Refreshing video stream...', 'warning');
+    addLog('Reloading page to recover video...', 'warning');
+
+    // Try best-effort to stop camera on robot side (if connection is alive)
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ command: 'sensor', sensor_type: 'cam', bin: 0 }));
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // Close local WebRTC resources
     stopWebRTC();
+
+    // Close WebSocket (if any) and then hard reload the page (equivalent to F5)
+    try {
+      if (ws) ws.close(1000, 'reload');
+    } catch (e) {
+      // ignore
+    }
+
     setTimeout(() => {
-      startWebRTC();
-    }, 500);
+      window.location.reload();
+    }, 200);
   };
 
   // UI rendering
@@ -562,56 +582,102 @@ function App() {
           )}
 
           {activeTool === 'camera' && (
-            <section style={{ height: '100%', overflowY: 'auto', padding: '24px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '24px', alignItems: 'start' }}>
-                {/* Left Column */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                  <div className="panel-container">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <h3 style={{ margin: 0, color: '#94a3b8' }}>Camera View</h3>
+            <section className="dash">
+              <div className="dash-grid">
+                <div className="dash-left">
+                  <div className="panel panel--camera">
+                    <div className="panel__header">
+                      <div className="panel__title">
+                        <span className="panel__titleText">Camera</span>
+                        <span className="panel__subtitle">WebRTC stream</span>
+                      </div>
                       <button
+                        className="btn btn--icon"
                         onClick={handleRefreshVideo}
-                        style={{ padding: '4px 8px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                        title="映像がフリーズしたときに再接続します"
+                        title="映像がフリーズしたときにページをリロードして復帰します"
+                        aria-label="映像のリロード"
                       >
                         🔄
                       </button>
                     </div>
-                    <CameraFeed stream={remoteStream} />
+                    <div className="panel__body">
+                      <CameraFeed stream={remoteStream} />
+                    </div>
                   </div>
-                  <div className="panel-container" style={{ padding: '20px' }}>
-                    <h3 style={{ marginTop: 0, marginBottom: '16px', color: '#94a3b8' }}>Manual Control</h3>
-                    <div style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
-                      <div style={{ flex: 1 }}>
-                        <label htmlFor="speed-slider" style={{ display: 'block', marginBottom: '8px', color: '#e2e8f0' }}>Speed: {speed}</label>
-                        <input
-                          id="speed-slider"
-                          type="range"
-                          min="0"
-                          max="100"
-                          value={speed}
-                          onChange={(e) => setSpeed(e.target.value)}
-                          style={{ width: '100%' }}
-                        />
+
+                  <div className="panel panel--control">
+                    <div className="panel__header">
+                      <div className="panel__title">
+                        <span className="panel__titleText">Manual control</span>
+                        <span className="panel__subtitle">Drive & speed</span>
                       </div>
-                      <Joystick onMove={handleJoystickMove} onStop={handleStop} speed={speed} />
+                    </div>
+                    <div className="panel__body">
+                      <div className="controlRow">
+                        <div className="speedControl">
+                          <div className="speedHeader">
+                            <span className="speedLabel">Speed</span>
+                            <span className="speedValue">{speed}</span>
+                          </div>
+                          <input
+                            id="speed-slider"
+                            type="range"
+                            min="0"
+                            max="100"
+                            value={speed}
+                            onChange={(e) => setSpeed(e.target.value)}
+                            className="sliderRange"
+                          />
+                        </div>
+                        <div className="joystickWrap">
+                          <Joystick onMove={handleJoystickMove} onStop={handleStop} speed={speed} />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
-                {/* Right Column */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                  <SensorControls
-                    onToggleSensor={handleToggleSensor}
-                    onToggleLog={handleToggleLog}
-                    sensorStates={sensorStates}
-                  />
-                  <LogManager
-                    files={logFiles}
-                    onReload={handleReloadLogs}
-                    onDownload={handleDownloadLog}
-                  />
-                  <div className="panel-container">
-                    <div className="panel-container">
+
+                <div className="dash-right">
+                  <div className="panel">
+                    <div className="panel__header">
+                      <div className="panel__title">
+                        <span className="panel__titleText">Sensors</span>
+                        <span className="panel__subtitle">Power & logging</span>
+                      </div>
+                    </div>
+                    <div className="panel__body">
+                      <SensorControls
+                        onToggleSensor={handleToggleSensor}
+                        onToggleLog={handleToggleLog}
+                        sensorStates={sensorStates}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="panel">
+                    <div className="panel__header">
+                      <div className="panel__title">
+                        <span className="panel__titleText">Logs</span>
+                        <span className="panel__subtitle">Download CSV</span>
+                      </div>
+                    </div>
+                    <div className="panel__body">
+                      <LogManager
+                        files={logFiles}
+                        onReload={handleReloadLogs}
+                        onDownload={handleDownloadLog}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="panel panel--sensors">
+                    <div className="panel__header">
+                      <div className="panel__title">
+                        <span className="panel__titleText">Telemetry</span>
+                        <span className="panel__subtitle">Live values</span>
+                      </div>
+                    </div>
+                    <div className="panel__body panel__body--scroll">
                       <SensorData
                         imu={imuData}
                         mag={magData}

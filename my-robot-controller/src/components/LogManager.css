@@ -22,6 +22,11 @@
     gap: 8px;
 }
 
+.log-actions button,
+.log-actions select {
+    width: 100%;
+}
+
 .file-select {
     padding: 8px;
     border-radius: 6px;
