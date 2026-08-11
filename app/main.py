@@ -258,10 +258,21 @@ class ROSCameraTrack(VideoStreamTrack):
             cv2.putText(cv_img, "Waiting for Camera...", (180, 240), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
+         
         # OpenCV(BGR) -> PyAV VideoFrame に変換して送信
         # aiortc/av は BGR24 形式を受け入れ可能
         cv_img = cv2.resize(cv_img, (320, 240))
-        
+        # --- デバッグ処理：画像上にロボットIDと現在時刻を描画 ---
+        cv2.putText(
+            cv_img, 
+            f"ROBOT ID: {CURRENT_ROBOT_ID} | {datetime.now().strftime('%H:%M:%S.%f')[:-3]}", 
+            (10, 30), 
+            cv2.FONT_HERSHEY_SIMPLEX, 
+            0.7, 
+            (0, 0, 255), # 赤色文字
+            2
+        )
+        # ----------------------------------------------------
         frame = VideoFrame.from_ndarray(cv_img, format="bgr24")
         frame.pts = pts
         frame.time_base = time_base
@@ -1858,6 +1869,13 @@ class RobotWebsocketClient:
     async def handle_webrtc_offer(self, websocket, sdp):
         """WebRTCのOfferを受け取り、Answerを返すシグナリング処理"""
         print("Received WebRTC Offer. Establishing Peer Connection...")
+        for old_pc in list(self.pcs):
+            try:
+                await old_pc.close()
+                print("Closed previous PeerConnection.")
+            except Exception as e:
+                print(f"Error closing old PeerConnection: {e}")
+        self.pcs.clear()
         
         ice_servers = [
             RTCIceServer(
