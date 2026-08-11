@@ -471,6 +471,27 @@ class RobotController:
     # ----------------------------------------------------------
     #  画像処理 (OpenCV)
     # ----------------------------------------------------------
+    def get_image(self):
+        """
+        【新規】カメラから最新の画像を取得し、OpenCV形式(BGR)で直接返す。
+        内部状態(_cv_image)は変更しない（ステートレス用）。
+        """
+        self._check_stop()
+        global latest_image_msg
+        
+        with image_lock:
+            if latest_image_msg is None:
+                self.print("Warning: No camera image received yet.")
+                return None
+            try:
+                # ROSメッセージ -> OpenCV画像変換
+                cv_img = self.ros_node.bridge.imgmsg_to_cv2(latest_image_msg, desired_encoding='bgr8')
+                # カメラ取り付け向きに合わせて正立にする
+                cv_img = cv2.flip(cv_img, -1)
+                return cv_img
+            except Exception as e:
+                self.print(f"Image get error: {e}")
+                return None
     def capture_image(self):
         """
         カメラから最新の画像を取得し、内部変数 _cv_image に保存する。
