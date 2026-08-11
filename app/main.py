@@ -921,13 +921,13 @@ class RosSubscriberNode(Node):
         
         # --- センサーのサブスクライバ設定 ---
         self.imu_subscription = self.create_subscription(
-            Imu, '/bno055/imu', self.imu_callback, 10)
+            Imu, f'/{CURRENT_ROBOT_ID}/bno055/imu', self.imu_callback, 10)
         self.mag_subscription = self.create_subscription(
-            MagneticField, '/bno055/mag', self.mag_callback, 10)
+            MagneticField, f'/{CURRENT_ROBOT_ID}/bno055/mag', self.mag_callback, 10)
         self.image_subscription = self.create_subscription(
-            Image, '/camera/image_raw', self.image_callback, 10)
+            Image, f'/{CURRENT_ROBOT_ID}/camera/image_raw', self.image_callback, 10)
         self.gps_subscription = self.create_subscription(
-            NavSatFix, '/gps/fix', self.gps_callback, 10)
+            NavSatFix, f'/{CURRENT_ROBOT_ID}/gps/fix', self.gps_callback, 10)
         
         self.bridge = CvBridge()
 
@@ -1110,7 +1110,8 @@ class RosSubscriberNode(Node):
                 "-p", "format:=YUYV", 
                 "-p", "width:=320",       # 横幅を320ピクセルに（通常は640）
                 "-p", "height:=240",      # 高さを240ピクセルに（通常は480）
-                "-p", "frame_rate:=5.0"  # FPSを5に
+                "-p", "frame_rate:=5.0",# FPSを5に
+                "-r", f"__ns:=/{CURRENT_ROBOT_ID}" 
             ]
             log_prefix = "Camera"
             kill_pattern = "camera_ros" 
