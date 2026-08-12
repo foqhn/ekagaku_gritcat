@@ -1118,13 +1118,18 @@ class RosSubscriberNode(Node):
 
         elif sensor_type == "imu":
             proc_attr = "proc_imu"
-            command = ["ros2", "launch", "bno055", "bno055.launch.py"]
+            command = ["ros2", "launch", "bno055", "bno055.launch.py",
+                       f"namespace:={CURRENT_ROBOT_ID}"
+                       ]
             log_prefix = "IMU"
             kill_pattern = "bno055"
 
         elif sensor_type == "gps":
             proc_attr = "proc_gps"
-            command = ["ros2", "run", "gpsd_driver", "gpsd_client_node"]
+            command = ["ros2", "run", "gpsd_driver", "gpsd_client_node",
+                       "--ros-args",
+                       "-r", 
+                       f"/gps/fix:=/{CURRENT_ROBOT_ID}/gps/fix"]
             log_prefix = "GPS"
             kill_pattern = "gpsd_client_node"
 
@@ -1743,6 +1748,7 @@ class RobotWebsocketClient:
         
         
         self.pcs = set()
+        self.webrtc_task = None 
 
 
     async def run(self):
@@ -1877,8 +1883,18 @@ class RobotWebsocketClient:
                         await websocket.send(json.dumps({"type": "error", "message": "'filename' is required."}))
                 elif command == "webrtc_offer":
                     # 基地局からのWebRTC接続要求を処理する
+                    target_id = command_data.get("target_robot_id") or command_data.get("robot_id")
+                    if target_id and target_id != CURRENT_ROBOT_ID:
+                        continue
                     sdp = command_data.get("sdp")
-                    asyncio.create_task(self.handle_webrtc_offer(websocket, sdp))
+                    
+                    # 既に実行中の Offer タスクがあれば即座にキャンセルして破棄する
+                    if self.webrtc_task and not self.webrtc_task.done():
+                        self.webrtc_task.cancel()
+                        print("Cancelled ongoing previous WebRTC offer task.")
+
+                    # 新しいタスクとして実行
+                    self.webrtc_task = asyncio.create_task(self.handle_webrtc_offer(websocket, sdp))
                 else:
                     # その他のコマンドはROSノードのコマンドキューへ
                     self.ros_node.command_queue.put(command_data)
@@ -1956,8 +1972,8 @@ class RobotWebsocketClient:
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
             
-            # 修正ポイント 3: タイムアウトを10秒に延長
-            timeout = 30.0
+            # 修正ポイント 3: タイムアウト3秒でICE gatheringが完了するのを待つ
+            timeout = 3.0
             start_time = asyncio.get_event_loop().time()
             while pc.iceGatheringState != "complete":
                 await asyncio.sleep(0.1)
