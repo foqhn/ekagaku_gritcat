@@ -222,5 +222,5 @@ build/
 devel/
 log/
 grit_ws/install/
-
+.config.json
 config.json
