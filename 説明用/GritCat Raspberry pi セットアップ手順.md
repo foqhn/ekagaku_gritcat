@@ -139,16 +139,10 @@
    ```bash
    cd ~/ekagaku_gritcat/grit_ws/src
    git clone https://github.com/flynneva/bno055.git
-   cd ..
-   colcon build
+   sudo bash ~/ekagaku_gritcat/grit_ws/setup_ros_packages.sh
    source ~/.bashrc
    ```
-   7. bno055 のパッケージを少し書き換える
-      1. bno055/launch/bno055.launch.py を編集<br>
-         ![](images/Pasted%20image%2020251206195642.png)<br>
-      2. bno055/bno055/params/bno055_params_i2c.yaml を編集<br>
-         ![](images/Pasted%20image%2020251206195822.png)
-   8. GPS のセットアップ
+   7. GPS のセットアップ
       以下のコマンドを打ち，GPS のセットアップファイルを開く
    ```bash
    sudo nano /etc/default/gpsd
