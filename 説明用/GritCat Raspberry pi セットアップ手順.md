@@ -116,11 +116,12 @@
    ```
    2. github からリポジトリをクローン
    ```bash
-   git clone https://github.com/foqhn/ekagaku_gritcat.git -b ws_client_ver
+   git clone https://github.com/foqhn/ekagaku_gritcat.git -b ws_client_rtc_ver
    ```
    3. ROS のインストール
    ```bash
    source ~/ekagaku_gritcat/app/install_ros.sh
+   sudo bash ~/ekagaku_gritcat/app/tools/install_wifi_helper.sh
    ```
    途中でパスワードの入力や確認画面が出るので，適宜対応<br> 4. パッケージのインストール
    ```bash
