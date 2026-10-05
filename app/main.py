@@ -186,16 +186,30 @@ print(f"Target WebSocket URI: {TARGET_URI}{CURRENT_ROBOT_ID}")
 CAMERA_DEFAULTS = {
     "capture_width": 320, "capture_height": 240, "capture_fps": 5,
     "stream_width": 320, "stream_fps": 5,
+    "sensor_mode": "",   # camera_ros の sensor_mode。空ならドライバ (libcamera) に任せる
 }
 CAPTURE_RESOLUTIONS = [(320, 240), (640, 480), (800, 600), (1280, 720)]
 STREAM_WIDTHS = [320, 480, 640]
 CAMERA_FPS_CHOICES = [5, 10, 15]
+# センサーの読み出しモード。libcamera に任せると低解像度ではセンサー中央を切り取るモードが選ばれ、
+# 画角が狭くなる (例: IMX219 の 640x480 モードは中央 1280x960 のみ)。
+# 全画角を 2x2 ビニングで読むモードを指定すると、画角を保ったまま撮影解像度に縮小される。
+CAMERA_SENSOR_MODES = [
+    ("", "自動 (ドライバに任せる。低解像度では画角が狭くなることがある)"),
+    ("1640:1232", "Camera Module v2 / IMX219 — 全画角"),
+    ("2304:1296", "Camera Module 3 / IMX708 — 全画角"),
+    ("1296:972", "Camera Module v1 / OV5647 — 全画角"),
+    ("2028:1520", "HQ Camera / IMX477 — 全画角"),
+]
 SNAPSHOT_JPEG_QUALITY = 90
 SNAPSHOT_MAX_IMAGE_AGE_SEC = 2.0  # これより古い画像しかなければカメラ停止中とみなす
 
 def validate_camera_settings(data):
     """カメラ設定を検証して正規化した dict を返す。不正なら ValueError"""
-    s = {key: int(data.get(key, default)) for key, default in CAMERA_DEFAULTS.items()}
+    s = {key: int(data.get(key, default)) for key, default in CAMERA_DEFAULTS.items() if key != "sensor_mode"}
+    s["sensor_mode"] = str(data.get("sensor_mode", CAMERA_DEFAULTS["sensor_mode"]))
+    if s["sensor_mode"] not in [m for m, _ in CAMERA_SENSOR_MODES]:
+        raise ValueError(f"未対応の撮影モードです: {s['sensor_mode']}")
     if (s["capture_width"], s["capture_height"]) not in CAPTURE_RESOLUTIONS:
         raise ValueError(f"未対応の撮影解像度です: {s['capture_width']}x{s['capture_height']}")
     if s["capture_fps"] not in CAMERA_FPS_CHOICES or s["stream_fps"] not in CAMERA_FPS_CHOICES:
@@ -1457,6 +1471,11 @@ class RosSubscriberNode(Node):
                 "-p", f"frame_rate:={float(cam['capture_fps'])}",
                 "-r", f"__ns:=/{CURRENT_ROBOT_ID}"
             ]
+            if cam["sensor_mode"]:
+                # 全画角のセンサーモードを指定 (例: 1640:1232)。--ros-args の後ろに入れる。
+                # 値は確実に文字列パラメータとして渡すため引用符で囲む
+                ros_args_end = command.index("--ros-args") + 1
+                command[ros_args_end:ros_args_end] = ["-p", f"sensor_mode:='{cam['sensor_mode']}'"]
             log_prefix = "Camera"
             kill_pattern = "camera_ros" 
 
@@ -1903,6 +1922,7 @@ async def get_camera_api():
             "capture_resolutions": [list(r) for r in CAPTURE_RESOLUTIONS],
             "stream_widths": STREAM_WIDTHS,
             "fps": CAMERA_FPS_CHOICES,
+            "sensor_modes": [{"value": v, "label": l} for v, l in CAMERA_SENSOR_MODES],
         },
     }
 
@@ -1925,7 +1945,7 @@ async def save_camera_api(data: dict):
         camera_settings = new_settings
 
     # 配信設定は ROSCameraTrack が毎フレーム参照するので即反映。撮影設定はカメラ再起動が必要
-    capture_keys = ("capture_width", "capture_height", "capture_fps")
+    capture_keys = ("capture_width", "capture_height", "capture_fps", "sensor_mode")
     capture_changed = any(old_settings[k] != new_settings[k] for k in capture_keys)
     node = globals().get("ros_node")
     camera_restarted = False
@@ -2133,6 +2153,9 @@ DASHBOARD_HTML = """
                     <select id="cam_capture_res" onchange="updateCameraOptionStates()"></select>
                     <label for="cam_capture_fps">FPS</label>
                     <select id="cam_capture_fps" onchange="updateCameraOptionStates()"></select>
+                    <label for="cam_sensor_mode">撮影モード (画角)</label>
+                    <select id="cam_sensor_mode"></select>
+                    <p class="hint">「自動」では低い解像度のときにセンサー中央だけを切り取るモードが選ばれ、画角が狭くなることがあります。カメラの機種に合った「全画角」を選ぶと、画角を保ったまま縮小して撮影します。</p>
                     <p class="hint">画像処理ブロックとスナップショットはこの解像度です。変更するとカメラが再起動し、映像が数秒途切れます。</p>
                 </div>
                 <div>
@@ -2357,11 +2380,13 @@ DASHBOARD_HTML = """
                 fill('cam_capture_fps', options.fps, f => f, f => `${f} fps`);
                 fill('cam_stream_width', options.stream_widths, w => w, w => `${w} px`);
                 fill('cam_stream_fps', options.fps, f => f, f => `${f} fps`);
+                fill('cam_sensor_mode', options.sensor_modes, m => m.value, m => m.label);
 
                 document.getElementById('cam_capture_res').value = `${settings.capture_width}x${settings.capture_height}`;
                 document.getElementById('cam_capture_fps').value = settings.capture_fps;
                 document.getElementById('cam_stream_width').value = settings.stream_width;
                 document.getElementById('cam_stream_fps').value = settings.stream_fps;
+                document.getElementById('cam_sensor_mode').value = settings.sensor_mode || '';
                 updateCameraOptionStates();
             } catch(e) {
                 document.getElementById('cam_message').innerText = "カメラ設定の読み込みに失敗しました。";
@@ -2392,6 +2417,7 @@ DASHBOARD_HTML = """
                 capture_fps: Number(document.getElementById('cam_capture_fps').value),
                 stream_width: Number(document.getElementById('cam_stream_width').value),
                 stream_fps: Number(document.getElementById('cam_stream_fps').value),
+                sensor_mode: document.getElementById('cam_sensor_mode').value,
             };
             const msg = document.getElementById('cam_message');
             const res = await fetch('/api/camera', {
