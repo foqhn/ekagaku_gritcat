@@ -1,1007 +1,61 @@
-# how to run FastAPI
+#how to run FastAPI
 # uvicorn main:app --reload
-
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Imu, Image, MagneticField, NavSatFix, NavSatStatus
+from sensor_msgs.msg import Imu, Image
 
-import ctypes
 import asyncio
 import cv2
 import threading
-import base64
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, RTCConfiguration, RTCIceServer
-from av import VideoFrame
-
+import uuid
 import queue
 import json
 import websockets
 
-import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-
 from cv_bridge import CvBridge
 import numpy as np
-import math
-import csv
-from datetime import datetime
 
 import lgpio
 from src.oled import OLEDDisplay
 from src.motor_controller import GritMotor
-from src.system_info import get_wifi_info, get_cpu_temperature
-from src.i2c_utils import scan_i2c_bus
-from src.config_manager import ConfigManager
-from src.bme280_lgpio import BME280
-from src.mcp23017 import MCP23017 
 
-import subprocess
-import signal
-import os
-import sys
-import time
-import atexit  
-import shutil
+import threading
 
-import logging
-# logging.basicConfig(level=logging.DEBUG)
-# logging.getLogger("aioice").setLevel(logging.DEBUG)
-
-# ==========================================================
-# グローバル変数と排他制御 (Locks)
-# ==========================================================
-# ROSスレッドとメインスレッド/WebSocketスレッド間でデータを共有するための変数
+# --- グローバル変数とロック ---
 latest_imu_msg = None
 latest_image_msg = None
-latest_mag_msg = None
-latest_gps_msg = None
-latest_system_info = {}
-latest_bme_data = None
-
-# 画像処理結果（デバッグ用）の共有変数
-latest_debug_image = None
-last_debug_update_time = 0.0
-
-# スレッドセーフなアクセスのためのロックオブジェクト
 imu_lock = threading.Lock()
 image_lock = threading.Lock()
-gps_lock = threading.Lock()
-system_info_lock = threading.Lock()
-bme_lock = threading.Lock()
-debug_image_lock = threading.Lock() 
-oled_lock = threading.Lock()
-
-# C-APIの設定 (非同期例外注入時のクラッシュ・セグフォ防止)
-ctypes.pythonapi.PyThreadState_SetAsyncExc.argtypes = [ctypes.c_long, ctypes.py_object]
-ctypes.pythonapi.PyThreadState_SetAsyncExc.restype = ctypes.c_int
-
 command_queue = queue.Queue()
 shutdown_event = threading.Event() 
-
-# OLEDディスプレイの初期化
-oled = OLEDDisplay(font_size=15)
-
-# 設定をロード
-config = ConfigManager.load_config()
-CURRENT_ROBOT_ID = config.get("robot_id", "robot_unknown")
-SERVER_IP = config.get("server_ip", "192.168.11.14") # IPもConfig管理する場合
-SERVER_PORT = config.get("server_port", 8000)
-SERVER_URL = config.get("server_url")
-
-if SERVER_URL:
-    # URLが指定されている場合
-    # 末尾が / で終わっていない場合は補完する
-    if not SERVER_URL.endswith('/'):
-        SERVER_URL += '/'
-    TARGET_URI = SERVER_URL
-else:
-    # URLがない場合は、従来通り IP と Port から構築する
-    SERVER_IP = config.get("server_ip", "192.168.11.14")
-    SERVER_PORT = config.get("server_port", 8000)
-    TARGET_URI = f"ws://{SERVER_IP}:{SERVER_PORT}/ws/robot/"
-
-print(f"Target WebSocket URI: {TARGET_URI}{CURRENT_ROBOT_ID}")
-
-# ==========================================================
-# ヘルパー関数
-# ==========================================================
-def build_target_uri(conf):
-    """設定辞書からWebSocket URIを構築するヘルパー"""
-    uri = conf.get("server_url", "")
-    if uri:
-        if not uri.endswith('/'): uri += '/'
-        return f"{uri}{conf.get('robot_id')}"
-    else:
-        ip = conf.get("server_ip", "192.168.11.14")
-        port = conf.get("server_port", 8000)
-        return f"ws://{ip}:{port}/ws/robot/{conf.get('robot_id')}"
-    
-def update_oled(text_lines=None, mode=None, clear=False, start_x=0, start_y=0, line_spacing=12):
-    """
-    OLEDディスプレイの表示を一元管理する関数。
-    """
-    try:
-        with oled_lock:
-            if clear:
-                oled.clear()
-                if text_lines is None and mode is None:
-                    return
-
-            if mode:
-                display_lines = []
-                display_lines.append(f"ID : {CURRENT_ROBOT_ID}")
-                if mode == "connection":
-                    ssid, strength = get_wifi_info()
-                    if ssid:
-                        display_lines.append(f"Wi-Fi: {ssid[:12]}") 
-                        display_lines.append(f"Signal: {strength} dBm")
-                    else:
-                        display_lines.append("Wi-Fi: Disconnected")
-
-                elif mode == "custom":
-                    if text_lines is not None:
-                        if isinstance(text_lines, list):
-                            display_lines.extend(text_lines)
-                        else:
-                            display_lines.append(text_lines)
-                elif mode == "error":
-                    display_lines.append("Error occurred!")
-                    if text_lines is not None:
-                        if isinstance(text_lines, list):
-                            display_lines.extend(text_lines)
-                        else:
-                            display_lines.append(text_lines)
-                elif mode == "info":
-                    if text_lines is not None:
-                        if isinstance(text_lines, list):
-                            display_lines.extend(text_lines)
-                        else:
-                            display_lines.append(text_lines)
-                    else:
-                        display_lines.append("debug info")
-                    
-                    oled.display_text(display_lines, start_x=0, start_y=0, line_spacing=12)
-                    time.sleep(3)  # 情報表示は3秒間表示してから通常画面に戻す
-                    display_lines = []  # 画面をクリア
-                    ssid, strength = get_wifi_info()
-                    if ssid:
-                        display_lines.append(f"ID : {CURRENT_ROBOT_ID}")
-                        display_lines.append(f"Wi-Fi: {ssid[:12]}") 
-                        display_lines.append(f"Signal: {strength} dBm")
-                    else:
-                        display_lines.append("Wi-Fi: Disconnected")
-                
-                oled.display_text(display_lines, start_x=0, start_y=0, line_spacing=12)
-            elif text_lines is not None:
-                oled.display_text(text_lines, start_x=start_x, start_y=start_y, line_spacing=line_spacing)
-
-    except Exception as e:
-        print(f"OLED Error: {e}")
-
-def raise_keyboard_interrupt(thread_obj):
-    """
-    指定されたスレッドに対して非同期に KeyboardInterrupt 例外を送出する。
-    ユーザープログラムの強制停止に使用。
-    """
-    if not thread_obj.is_alive():
-        return
-    
-    tid = ctypes.c_long(thread_obj.ident)
-    ex_type = ctypes.py_object(KeyboardInterrupt) 
-    
-    # Python C APIを利用して例外をセット
-    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ex_type)
-    if res == 0:
-        print("Error: Invalid thread ID")
-
-def force_kill_os_process(pattern):
-    """
-    指定されたパターンに一致するOSプロセスを強制終了(SIGKILL)する。
-    ゾンビプロセスのクリーンアップ用。
-    """
-    try:
-        if shutil.which("pkill"):
-            subprocess.run(["pkill", "-f", "-9", pattern], 
-                         stdout=subprocess.DEVNULL, 
-                         stderr=subprocess.DEVNULL)
-    except Exception as e:
-        print(f"Failed to force kill process pattern '{pattern}': {e}")
-
-class ROSCameraTrack(VideoStreamTrack):
-    def __init__(self, ros_node, fps=10):
-        super().__init__()
-        self.ros_node = ros_node
-        self.target_fps = fps
-        self.frame_duration = 1.0 / self.target_fps
-        self.last_frame_time = 0.0
-
-    async def recv(self):
-        """
-        WebRTCが次のフレームを要求したときに呼ばれるメソッド。
-        ここで画像処理の結果を選択して返す。
-        """
-        current_time = time.time()
-        elapsed = current_time - self.last_frame_time
-        wait = self.frame_duration - elapsed
-        if wait > 0:
-            await asyncio.sleep(wait)
-        
-        self.last_frame_time = time.time()
-        
-        pts, time_base = await self.next_timestamp()
-        
-        cv_img = None
-        
-        # --- 優先順位 1: ユーザープログラムのデバッグ画像 (latest_debug_image) ---
-        global latest_debug_image, last_debug_update_time
-        with debug_image_lock:
-            # 0.5秒以内に更新されていれば採用
-            if latest_debug_image is not None and (time.time() - last_debug_update_time < 0.5):
-                cv_img = latest_debug_image.copy()
-
-        # --- 優先順位 2: 生のカメラ画像 (latest_image_msg) ---
-        if cv_img is None:
-            with image_lock:
-                if latest_image_msg is not None:
-                    try:
-                        # ROSメッセージ -> OpenCV形式
-                        cv_img = self.ros_node.bridge.imgmsg_to_cv2(latest_image_msg, 'bgr8')
-                        # 生データは逆さなので反転して正立にする
-                        cv_img = cv2.flip(cv_img, -1)
-                    except Exception as e:
-                        print(f"WebRTC Image conversion error: {e}")
-
-        # --- 優先順位 3: 画像が全くない場合は黒画面 ---
-        if cv_img is None:
-            cv_img = np.zeros((480, 640, 3), np.uint8)
-            cv2.putText(cv_img, "Waiting for Camera...", (180, 240), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-
-         
-        # OpenCV(BGR) -> PyAV VideoFrame に変換して送信
-        # aiortc/av は BGR24 形式を受け入れ可能
-        cv_img = cv2.resize(cv_img, (320, 240))
-        # --- デバッグ処理：画像上にロボットIDと現在時刻を描画 ---
-        cv2.putText(
-            cv_img, 
-            f"ROBOT ID: {CURRENT_ROBOT_ID} | {datetime.now().strftime('%H:%M:%S.%f')[:-3]}", 
-            (10, 30), 
-            cv2.FONT_HERSHEY_SIMPLEX, 
-            0.7, 
-            (0, 0, 255), # 赤色文字
-            2
-        )
-        # ----------------------------------------------------
-        frame = VideoFrame.from_ndarray(cv_img, format="bgr24")
-        frame.pts = pts
-        frame.time_base = time_base
-        
-        return frame
-
-# ==========================================================
-# RobotController クラス
-# ユーザープログラム(user_program.py)から利用されるAPIを提供する
-# ==========================================================
-class RobotController:
-    def __init__(self, ros_node, stop_event):
-        self.ros_node = ros_node
-        self._stop_event = stop_event 
-
-        # --- 画像処理用の内部状態 ---
-        self._cv_image = None       # 現在処理中の画像 (OpenCV BGR形式)
-        self._roi_offset_x = 0      # ROI（関心領域）によるX座標のズレ
-        self._roi_offset_y = 0      # ROIによるY座標のズレ
-        self._image_width = 0
-        self._image_height = 0
-
-    def _check_stop(self):
-        """
-        各メソッドの実行前に呼び出し、停止フラグが立っていたら
-        例外を投げてスクリプトを即座に中断させる安全装置。
-        """
-        if self._stop_event.is_set():
-            raise InterruptedError("Program stopped by user.")
-
-    # ----------------------------------------------------------
-    #  モーター & 基本制御
-    # ----------------------------------------------------------
-    def move(self, left, right, duration=None):
-        """左右モーターの速度制御 (-100 ~ 100)"""
-        self._check_stop()
-        cmd = {"command": "move", "left": int(left), "right": int(right)}
-        self.ros_node.command_queue.put(cmd)
-
-        if duration is not None:
-            self.sleep(duration)
-            self.stop()
-
-    def stop(self):
-        """モーター停止"""
-        cmd = {"command": "move", "left": 0, "right": 0}
-        self.ros_node.command_queue.put(cmd)
-
-    def sleep(self, seconds):
-        """
-        中断可能なスリープ処理。
-        time.sleepをそのまま使うと停止指令を受け付けなくなるため、細切れに待機する。
-        """
-        start_time = time.time()
-        while time.time() - start_time < seconds:
-            self._check_stop()
-            time.sleep(0.1) 
-
-    # ----------------------------------------------------------
-    #  センサー取得
-    # ----------------------------------------------------------
-    def get_sensor(self, sensor_type):
-        """
-        各種センサーの最新値を取得して辞書形式で返す。
-        sensor_type: 'compass', 'imu', 'mag', 'gps', 'bme280', 'wifi', 'battery'
-        """
-        self._check_stop()
-        
-        if sensor_type == 'compass':
-            # IMUのクォータニオンからヨー角（方位）を計算
-            with imu_lock:
-                imu_msg = latest_imu_msg
-            if not imu_msg: return {'heading': 0.0}
-            try:
-                q = imu_msg.orientation
-                yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-                # 北を0度として時計回りの角度(0-360)に変換
-                compass_deg = (90.0 - math.degrees(yaw)) % 360.0
-                return {'heading': float(compass_deg)}
-            except Exception:
-                return {'heading': 0.0}
-
-        elif sensor_type == 'imu':
-            data = None
-            with imu_lock:
-                if latest_imu_msg: data = imu_to_dict(latest_imu_msg)
-            if data: return data
-            # データがない場合のデフォルト値
-            return {
-                'linear_acceleration': {'x': 0.0, 'y': 0.0, 'z': 0.0},
-                'angular_velocity': {'x': 0.0, 'y': 0.0, 'z': 0.0},
-                'orientation': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}
-            }
-        
-        # ... 他のセンサー処理 (mag, gps, bme280, wifi, battery) ...
-        elif sensor_type == 'mag':
-            data = None
-            with imu_lock:
-                msg = latest_mag_msg
-                if msg:
-                    data = {'magnetic_field': {'x': msg.magnetic_field.x, 'y': msg.magnetic_field.y, 'z': msg.magnetic_field.z}}
-            if data: return data
-            return {'magnetic_field': {'x': 0.0, 'y': 0.0, 'z': 0.0}}
-
-        elif sensor_type == 'gps':
-            data = None
-            with gps_lock:
-                if latest_gps_msg: data = gps_to_dict(latest_gps_msg)
-            if data: return data
-            return {'latitude': 0.0, 'longitude': 0.0, 'altitude': 0.0, 'status': {'status': 0}}
-
-        elif sensor_type == 'bme':
-            data = None
-            with bme_lock:
-                if latest_bme_data: data = latest_bme_data.copy()
-            if data:
-                return {
-                    'temperature_celsius': data.get('temperature', 0.0),
-                    'humidity_percent': data.get('humidity', 0.0),
-                    'pressure_hpa': data.get('pressure', 0.0)
-                }
-            return {'temperature_celsius': 0.0, 'humidity_percent': 0.0, 'pressure_hpa': 0.0}
-
-        elif sensor_type == 'wifi':
-            ssid, rssi = get_wifi_info()
-            if rssi is None: rssi = 0
-            return {'rssi': rssi, 'ssid': ssid}
-        
-        elif sensor_type == 'battery':
-            # 現状はダミー値を返す
-            return {'voltage': 0.0}
-
-        else:
-            self.print(f"Warning: Unknown sensor type '{sensor_type}'")
-            return {}
-
-    # ----------------------------------------------------------
-    #  IO / Display (MCP23017 & OLED)
-    # ----------------------------------------------------------
-    def set_pin_mode(self, pin, mode):
-        """GPIOエキスパンダのピンモード設定 (mode: 'in' or 'out')"""
-        self._check_stop()
-        if not self.ros_node.mcp: return
-        m_val = MCP23017.INPUT if mode == 'in' else MCP23017.OUTPUT
-        # 入力モード時はプルアップ有効化
-        pull_up = True if mode == 'in' else False
-        with self.ros_node.mcp_lock:
-            try:
-                self.ros_node.mcp.setup(pin, m_val, pull_up=pull_up)
-            except Exception as e:
-                self.print(f"IO Setup Error: {e}")
-
-    def digital_write(self, pin, value):
-        """デジタル出力"""
-        self._check_stop()
-        if not self.ros_node.mcp: return
-        val = 1 if value else 0
-        with self.ros_node.mcp_lock:
-            try:
-                self.ros_node.mcp.output(pin, val)
-            except Exception as e:
-                self.print(f"IO Write Error: {e}")
-
-    def digital_read(self, pin):
-        """デジタル入力"""
-        self._check_stop()
-        if not self.ros_node.mcp: return 0
-        with self.ros_node.mcp_lock:
-            try:
-                return self.ros_node.mcp.input(pin)
-            except Exception as e:
-                self.print(f"IO Read Error: {e}")
-                return 0
-
-    def buzzer(self, enable):
-        """ブザー制御（MCP23017のPin 7に接続されている想定）"""
-        self.digital_write(7, 1 if enable else 0)
-
-    def print_display(self, message):
-        """OLEDディスプレイにメッセージを表示"""
-        self._check_stop()
-        try:
-            lines = []
-            if isinstance(message, list):
-                lines = [str(x) for x in message]
-            else:
-                lines = str(message).split('\n')
-            update_oled(text_lines=lines, start_x=0, start_y=0, line_spacing=15)
-        except Exception as e:
-            print(f"[OLED Error]: {e}")
-
-    def print(self, text):
-        """コンソールへのログ出力（プレフィックス付き）"""
-        print(f"[Robot]: {text}")
-
-    # ----------------------------------------------------------
-    #  画像処理 (OpenCV)
-    # ----------------------------------------------------------
-    def get_image(self):
-        """
-        【新規】カメラから最新の画像を取得し、OpenCV形式(BGR)で直接返す。
-        内部状態(_cv_image)は変更しない（ステートレス用）。
-        """
-        self._check_stop()
-        global latest_image_msg
-        
-        with image_lock:
-            if latest_image_msg is None:
-                self.print("Warning: No camera image received yet.")
-                return None
-            try:
-                # ROSメッセージ -> OpenCV画像変換
-                cv_img = self.ros_node.bridge.imgmsg_to_cv2(latest_image_msg, desired_encoding='bgr8')
-                # カメラ取り付け向きに合わせて正立にする
-                cv_img = cv2.flip(cv_img, -1)
-                return cv_img
-            except Exception as e:
-                self.print(f"Image get error: {e}")
-                return None
-    def capture_image(self):
-        """
-        カメラから最新の画像を取得し、内部変数 _cv_image に保存する。
-        【重要】画像の上下反転(-1)を行い、正立画像として保持する。
-        """
-        self._check_stop()
-        global latest_image_msg
-        
-        with image_lock:
-            if latest_image_msg is None:
-                self.print("Warning: No camera image received yet.")
-                self._cv_image = None
-                return False
-            
-            try:
-                # ROSメッセージ -> OpenCV画像変換
-                cv_img = self.ros_node.bridge.imgmsg_to_cv2(latest_image_msg, desired_encoding='bgr8')
-                # カメラ取り付け向きに合わせて正立にする (flip code -1: 両軸反転)
-                cv_img = cv2.flip(cv_img, -1)
-                
-                self._cv_image = cv_img
-                self._image_height, self._image_width = cv_img.shape[:2]
-                
-                # 画像を新しく取得したのでROIオフセットをリセット
-                self._roi_offset_x = 0
-                self._roi_offset_y = 0
-                return True
-            except Exception as e:
-                self.print(f"Image capture error: {e}")
-                self._cv_image = None
-                return False
-
-    def get_image_size(self):
-        if self._cv_image is None: return (0, 0)
-        h, w = self._cv_image.shape[:2]
-        return (w, h)
-
-    def set_roi(self, x, y, w, h):
-        """
-        画像を関心領域(ROI)で切り抜く。
-        以降の画像処理はこの切り抜かれた領域に対して行われる。
-        座標のオフセットを記憶し、後でグローバル座標に戻せるようにする。
-        """
-        self._check_stop()
-        if self._cv_image is None: return
-
-        current_h, current_w = self._cv_image.shape[:2]
-        # 範囲外アクセスのガード
-        x = max(0, min(x, current_w - 1))
-        y = max(0, min(y, current_h - 1))
-        w = max(1, min(w, current_w - x))
-        h = max(1, min(h, current_h - y))
-
-        self._cv_image = self._cv_image[y:y+h, x:x+w]
-        
-        # オフセットを累積（切り抜いた分、原点がずれるのを補正）
-        self._roi_offset_x += x
-        self._roi_offset_y += y
-
-    def enhance_contrast(self, clip_limit=2.0):
-        """コントラスト強調 (CLAHE)"""
-        self._check_stop()
-        if self._cv_image is None: return
-        try:
-            lab = cv2.cvtColor(self._cv_image, cv2.COLOR_BGR2LAB)
-            l, a, b = cv2.split(lab)
-            clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8,8))
-            l = clahe.apply(l)
-            lab = cv2.merge((l, a, b))
-            self._cv_image = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-        except Exception as e:
-            self.print(f"Contrast enhance error: {e}")
-
-    def apply_morphology(self, operation, kernel_size=5):
-        """モルフォロジー演算 (ノイズ除去等)"""
-        self._check_stop()
-        if self._cv_image is None: return
-        try:
-            kernel = np.ones((kernel_size, kernel_size), np.uint8)
-            op = cv2.MORPH_OPEN
-            if operation == 'close': op = cv2.MORPH_CLOSE
-            elif operation == 'erode': op = cv2.MORPH_ERODE
-            elif operation == 'dilate': op = cv2.MORPH_DILATE
-            self._cv_image = cv2.morphologyEx(self._cv_image, op, kernel)
-        except Exception as e:
-            self.print(f"Morphology error: {e}")
-
-    def detect_color_centroid(self, color_space, min_vals, max_vals):
-        """
-        指定色の重心を検出する。
-        戻り値の(x, y)は、ROI切り抜き前の「画面全体の座標系」で返す。
-        """
-        self._check_stop()
-        if self._cv_image is None:
-            return {'exists': False, 'x': 0, 'y': 0, 'area': 0}
-
-        try:
-            target_img = None
-            if color_space.upper() == 'HSV':
-                target_img = cv2.cvtColor(self._cv_image, cv2.COLOR_BGR2HSV)
-            elif color_space.upper() == 'HSL':
-                target_img = cv2.cvtColor(self._cv_image, cv2.COLOR_BGR2HLS)
-            else:
-                target_img = self._cv_image
-
-            lower = np.array(min_vals, dtype=np.uint8)
-            upper = np.array(max_vals, dtype=np.uint8)
-            
-            mask = cv2.inRange(target_img, lower, upper)
-            M = cv2.moments(mask)
-            area = M['m00']
-            
-            if area > 0:
-                cx = int(M['m10'] / area)
-                cy = int(M['m01'] / area)
-                
-                # 現在のROI座標系からグローバル座標系に変換
-                global_x = cx + self._roi_offset_x
-                global_y = cy + self._roi_offset_y
-                
-                return {'exists': True, 'x': global_x, 'y': global_y, 'area': int(area)}
-            else:
-                return {'exists': False, 'x': 0, 'y': 0, 'area': 0}
-
-        except Exception as e:
-            self.print(f"Color detect error: {e}")
-            return {'exists': False, 'x': 0, 'y': 0, 'area': 0}
-
-    # --- 視覚化・デバッグ用メソッド ---
-
-    def draw_marker(self, x, y, color=(0, 255, 0), size=15):
-        """
-        画面上の指定座標(グローバル座標)にマーカーを描画する。
-        内部でROI座標系に変換して描画を行う。
-        """
-        self._check_stop()
-        if self._cv_image is None: return
-
-        # グローバル座標 -> 現在の画像（ROI）内座標
-        lx = int(x - self._roi_offset_x)
-        ly = int(y - self._roi_offset_y)
-        
-        h, w = self._cv_image.shape[:2]
-        # 描画範囲内なら描画
-        if -size < lx < w + size and -size < ly < h + size:
-            cv2.drawMarker(self._cv_image, (lx, ly), color, 
-                           markerType=cv2.MARKER_CROSS, markerSize=size, thickness=2)
-
-    def draw_rect(self, x, y, w, h, color=(0, 255, 0), thickness=2):
-        """指定領域(グローバル座標)に矩形を描画する"""
-        self._check_stop()
-        if self._cv_image is None: return
-
-        lx = int(x - self._roi_offset_x)
-        ly = int(y - self._roi_offset_y)
-        cv2.rectangle(self._cv_image, (lx, ly), (lx+w, ly+h), color, thickness)
-
-    def show_image(self):
-        """
-        現在の処理画像をWeb画面への配信用として登録する。
-        これを呼ぶと、フロントエンドには生のカメラ映像の代わりに
-        この時点の画像（加工・描画済み）が優先して表示される。
-        """
-        self._check_stop()
-        if self._cv_image is None: return
-
-        global latest_debug_image, last_debug_update_time
-        with debug_image_lock:
-            latest_debug_image = self._cv_image.copy()
-            last_debug_update_time = time.time()
-
-
-# ==========================================================
-# ScriptManager クラス
-# ユーザープログラムの実行・停止・保存・物理ボタン監視
-# ==========================================================
-class ScriptManager:
-    def __init__(self, ros_node):
-        self.ros_node = ros_node
-        self.script_path = "user_program.py"  
-        self.stop_event = threading.Event()
-        self.execution_thread = None
-        self.ros_node.get_logger().info("ScriptManager initialized (Watching MCP23017 Pin 8 for button)")
-
-    def save_code(self, code_str):
-        """受信したコードをファイルに保存"""
-        try:
-            normalized_code = code_str.replace('\r\n', '\n').replace('\r', '\n')
-            with open(self.script_path, "w", encoding="utf-8") as f:
-                f.write(normalized_code)
-            print(f"Code saved to {self.script_path}")
-            return True
-        except Exception as e:
-            print(f"Save error: {e}")
-            return False
-
-    def start_program(self):
-        """ユーザープログラムを別スレッドで実行開始"""
-        if self.execution_thread and self.execution_thread.is_alive():
-            print("Program is already running.")
-            return
-
-        if not os.path.exists(self.script_path):
-            print("No program file found.")
-            return
-
-        print(">>> Starting User Program >>>")
-        self.is_stopping = False
-        self.stop_event.clear()
-        
-        with open(self.script_path, "r", encoding="utf-8") as f:
-            code_str = f.read()
-
-        # daemon=Trueにすることでメインプロセス終了時に道連れにする
-        self.execution_thread = threading.Thread(
-            target=self._run_script_thread, 
-            args=(code_str,), 
-            daemon=True
-        )
-        self.execution_thread.start()
-
-    def stop_program(self):
-        """実行中のプログラムを強制停止"""
-        if self.execution_thread and self.execution_thread.is_alive():
-            if getattr(self, 'is_stopping', False):
-                return
-            self.is_stopping = True
-            
-            print(">>> Requesting User Script to stop gracefully... >>>")
-            self.stop_event.set()
-            
-            # asyncioのイベントループをブロックしないよう、別スレッドで終了を監視
-            def watchdog(target_thread):
-                # 1秒待機し、それでも終了しなければKeyboardInterruptを注入
-                target_thread.join(timeout=1.0)
-                if target_thread.is_alive():
-                    print(">>> Script is stubborn. Injecting KeyboardInterrupt... >>>")
-                    raise_keyboard_interrupt(target_thread)
-                    
-                    target_thread.join(timeout=5.0)
-                    if target_thread.is_alive():
-                        print("Warning: Script is STILL stubborn. Blocking in C?")
-                
-                self.is_stopping = False
-            
-            threading.Thread(target=watchdog, args=(self.execution_thread,), daemon=True).start()
-
-        # 安全のためモーター停止コマンドを送信
-        self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
-        # stop_event.clear() はここでは行わず、次回のstart_program()で行う
-
-    def _run_script_thread(self, code_str):
-        """実際にユーザースクリプトを実行するスレッド本体"""
-        robot = RobotController(self.ros_node, self.stop_event)
-        
-        # ユーザープログラム内で利用可能な変数・モジュールを定義
-        local_scope = {
-            "robot": robot,
-            "time": time,
-            "np": np,
-            "print": print,
-            "math": __import__("math") 
-        }
-        try:
-            print(">>> User Script Started >>>")
-            update_oled(text_lines=["", "   Program", "   Running...", ""], start_x=5, start_y=5, line_spacing=15)
-            # 文字列として渡されたPythonコードを実行
-            exec(code_str, {}, local_scope)
-            print("<<< User Script Finished Normally <<<")
-
-        except KeyboardInterrupt:
-            print("\n!!! User Script Interrupted by System (Stop Command) !!!")
-            update_oled(text_lines=["", "   STOPPED", "", ""], start_x=5, start_y=5)
-            time.sleep(1.0) 
-
-        except SyntaxError as e:
-            print(f"!!! Syntax Error in User Script: line {e.lineno} !!!\n{e}")
-
-        except Exception as e:
-            print(f"!!! Runtime Error in User Script: {e} !!!")
-            import traceback
-            traceback.print_exc()
-
-        finally:
-            print("--- Safety Cleanup: Stopping Motors ---")
-            robot.stop()
-            update_oled(mode="connection")
-
-    def check_button(self):
-        """
-        MCP23017のPin 15を監視
-        - 0.1秒〜3秒未満: プログラムの開始/停止
-        - 3秒〜8秒未満: システムの再起動 (プロセス初期化)
-        - 8秒以上: システムのシャットダウン (ラズパイ電源OFF)
-        """
-        if not self.ros_node.mcp: return
-        
-        try:
-            # 0が押下状態 (Pull-up)
-            is_pressed = False
-            with self.ros_node.mcp_lock:
-                if self.ros_node.mcp.input(15) == 0:
-                    is_pressed = True
-
-            if is_pressed:
-                press_start = time.time()
-                shutdown_triggered = False
-                
-                # フィードバック用のフラグ
-                flag_3s = False
-                
-                # ボタンが押されている間ループ
-                while True:
-                    time.sleep(0.1)
-                    elapsed = time.time() - press_start
-                    
-                    # 押下継続確認
-                    with self.ros_node.mcp_lock:
-                        if self.ros_node.mcp.input(15) != 0:
-                            break # ボタンが離された
-                    
-                    # --- 3秒経過: 「再起動」のスタンバイ状態 ---
-                    if elapsed >= 3.0 and not flag_3s:
-                        flag_3s = True
-                        self._beep(0.1) # 「ピッ」と短く鳴らす
-                        update_oled(text_lines=["", " Release to", " RESTART", ""], clear=True, start_x=5, start_y=5)
-                    
-                    # --- 8秒経過: 「シャットダウン」発動 ---
-                    if elapsed >= 8.0:
-                        shutdown_triggered = True
-                        self._beep(1.0) # 「ピーー」と長く鳴らす
-                        self.system_shutdown()
-                        break
-                
-                # --- ボタンが離された時の判定 ---
-                if not shutdown_triggered:
-                    duration = time.time() - press_start
-                    
-                    if duration >= 3.0:
-                        # 3秒〜8秒の間で離された -> システム再起動
-                        self.system_restart()
-                    elif duration > 0.1:
-                        # 0.1秒〜3秒の間で離された -> プログラム開始/停止 (チャタリング防止)
-                        if self.execution_thread and self.execution_thread.is_alive():
-                            print("Button: Stop Program")
-                            self.stop_program()
-                        else:
-                            print("Button: Start Program")
-                            self.start_program()
-                        
-                        # ボタンが完全に離されるのを待つ
-                        self._wait_for_release(15)
-                        # ステータス表示に戻す
-                        update_oled(mode="connection")
-
-        except Exception as e:
-            print(f"Button Check Error: {e}")
-
-    def _beep(self, duration):
-        """ブザーを指定秒数鳴らすヘルパーメソッド"""
-        if not self.ros_node.mcp: return
-        try:
-            with self.ros_node.mcp_lock:
-                self.ros_node.mcp.output(7, 1)
-            time.sleep(duration)
-            with self.ros_node.mcp_lock:
-                self.ros_node.mcp.output(7, 0)
-        except:
-            pass
-
-    def system_restart(self):
-        """システム（Pythonプロセス）を安全に再起動する"""
-        print("!!! System Restart Sequence Started !!!")
-        
-        # 1. 実行中のユーザープログラムを停止
-        self.stop_program()
-        
-        # 2. ディスプレイに通知
-        update_oled(text_lines=["", "  SYSTEM", "  RESTARTING...", ""], clear=True, start_x=0, start_y=0)
-        
-        # 3. モーターの安全停止
-        self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
-        
-        # 少し待機してリソースの解放を待つ
-        time.sleep(1.5)
-        
-        # 4. OSレベルで現在のPythonスクリプトを再実行
-        print("Restarting application via os.execv...")
-        os.execv(sys.executable, ['python3'] + sys.argv)
-
-            
-    def _wait_for_release(self, pin):
-        """ボタンが離されるまで待機"""
-        while True:
-            val = 1
-            try:
-                with self.ros_node.mcp_lock:
-                    val = self.ros_node.mcp.input(pin)
-            except: pass
-            if val == 1: break
-            time.sleep(0.1)
-    def system_shutdown(self):
-        """システムを安全に停止し、電源を切る"""
-        print("!!! System Shutdown Sequence Started !!!")
-        
-        # 1. 実行中のユーザープログラムを停止
-        self.stop_program()
-        
-        # 2. ディスプレイに通知
-        update_oled(text_lines=["", "  SHUTTING DOWN", "  PLEASE WAIT...", ""], clear=True, start_x=0, start_y=0)
-        
-        # 3. モーターの安全停止（念押し）
-        self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
-        
-        # 4. 少し待機してOSにシャットダウン命令を出す
-        time.sleep(2.0)
-        os.system("sudo shutdown -h now")
-
-
-# ==========================================================
-# ROS 2 ノード
-# センサー購読、ハードウェア制御、外部プロセス管理
-# ==========================================================
+# --- ROS 2 ノード ---
 class RosSubscriberNode(Node):
-    def __init__(self, command_queue):
+    def __init__(self,command_queue):
         super().__init__('ros_fastapi_subscriber')
-        
-        # --- センサーのサブスクライバ設定 ---
         self.imu_subscription = self.create_subscription(
-            Imu, f'/{CURRENT_ROBOT_ID}/bno055/imu', self.imu_callback, 10)
-        self.mag_subscription = self.create_subscription(
-            MagneticField, f'/{CURRENT_ROBOT_ID}/bno055/mag', self.mag_callback, 10)
+            Imu, '/bno055/imu', self.imu_callback, 10)
         self.image_subscription = self.create_subscription(
-            Image, f'/{CURRENT_ROBOT_ID}/camera/image_raw', self.image_callback, 10)
-        self.gps_subscription = self.create_subscription(
-            NavSatFix, f'/{CURRENT_ROBOT_ID}/gps/fix', self.gps_callback, 10)
-        
+            Image, '/camera/image_raw', self.image_callback, 10)
         self.bridge = CvBridge()
 
-        # --- CSVログ機能用 ---
-        self.log_directory = "sensor_logs"
-        self.is_logging = False
-        self.log_file = None
-        self.csv_writer = None
-        self.log_timer = None
-        self.temp_log_path = None
-        self.final_log_path = None
-
-        # --- ハードウェア初期化 ---
-        self.mcp_lock = threading.Lock()
-        self.mcp = None
-
-        self.h = None
+        self.h= None
         self.my_motor = None
-        self.bme280 = None
-        
-        # モーターコントローラ (GritMotor / lgpio)
         try:
-            self.h = lgpio.gpiochip_open(0)
-            #self.relay_pin = 17 # モーター電源リレー用
-            self.stby_pin=22
-            #lgpio.gpio_claim_output(self.h, self.relay_pin)
-            lgpio.gpio_claim_output(self.h, self.stby_pin)
+            self.h= lgpio.gpiochip_open(0)
+            self.relay_pin = 17
+            lgpio.gpio_claim_output(self.h, self.relay_pin)
             self.my_motor = GritMotor(self.h)
 
-            #lgpio.gpio_write(self.h, self.relay_pin, 0)
-            lgpio.gpio_write(self.h, self.stby_pin, 1)
+            lgpio.gpio_write(self.h, self.relay_pin, 0)  # リレーOFFで初期化
             self.get_logger().info('Motor controller initialized successfully.')
         except Exception as e:  
             self.get_logger().error(f'Error initializing motor controller: {e}')
-        
-        # 環境センサ BME280
-        try:
-            self.bme280 = BME280(bus_number=1, i2c_address=0x76)
-            self.get_logger().info('BME280 initialized successfully.')
-        except Exception as e:
-            self.get_logger().error(f'Error initializing BME280: {e}')
 
-        # IOエキスパンダ MCP23017
-        try:
-            self.mcp = MCP23017(bus=1, address=0x20)
-            self.mcp.setup(7, MCP23017.OUTPUT) # Buzzer
-            self.mcp.output(0, 0) 
-            self.mcp.setup(15, MCP23017.INPUT, pull_up=True) # Button
-            self.get_logger().info('MCP23017 initialized successfully.')
 
-            # 起動音
-            self.get_logger().info('System Startup Beep...')
-            self.mcp.output(7, 1)
-            time.sleep(1.0)
-            self.mcp.output(7, 0)
-
-        except Exception as e:
-            self.get_logger().error(f'MCP23017 Init Error: {e}')
-            self.mcp = None
-
-        # --- 外部プロセス管理（カメラ、IMU、GPSのROSノード） ---
-        self.proc_cam = None 
-        self.proc_imu = None
-        self.proc_gps = None
-        atexit.register(self.cleanup) # プログラム終了時のクリーンアップ登録
-       
         self.command_queue = command_queue
-        # コマンド処理用タイマー (0.1秒間隔)
         self.command_timer = self.create_timer(0.1, self.process_commands)
-        # 環境センサ読み取りタイマー (1.0秒間隔)
-        self.env_sensor_timer = self.create_timer(1.0, self.update_env_sensors)
         self.get_logger().info('ROS Subscriber Node has been started.')
 
-    # --- コールバック関数群 ---
     def imu_callback(self, msg):
         global latest_imu_msg
         with imu_lock:
@@ -1011,357 +65,84 @@ class RosSubscriberNode(Node):
         global latest_image_msg
         with image_lock:
             latest_image_msg = msg
-    
-    def mag_callback(self, msg):
-        global latest_mag_msg
-        with imu_lock:
-            latest_mag_msg = msg
-
-    def gps_callback(self, msg):
-        global latest_gps_msg
-        with gps_lock:
-            latest_gps_msg = msg
-
-    def update_env_sensors(self):
-        """BME280から定期的にデータを取得"""
-        if self.bme280:
-            try:
-                data = self.bme280.read_data()
-                if data:
-                    global latest_bme_data
-                    with bme_lock:
-                        latest_bme_data = data
-            except Exception as e:
-                self.get_logger().warn(f"Failed to read BME280: {e}")
-
+        #self.get_logger().info('<<<<< Image data received by ROS node! >>>>>')
     def process_commands(self):
-        """
-        コマンドキューから命令を取り出し、モーター制御やセンサー起動を実行する。
-        WebSocketやRobotControllerからキューに追加される。
-        """
+        """キューを監視し、コマンドに応じてモーターを直接制御する"""
+        # モーターが正常に初期化されていない場合は何もしない
         if not self.my_motor:
             return
         try:
             while not self.command_queue.empty():
                 command_data = self.command_queue.get_nowait()
-                command = command_data.get("command")
-                left_speed = int(command_data.get("left", 0)) 
-                right_speed = int(command_data.get("right", 0)) 
+                self.get_logger().info(f"Processing command: {command_data}")
 
+                command= command_data.get("command")
+        
+                left_speed= int(command_data.get("left", 0)) 
+                right_speed= int(command_data.get("right", 0)) 
+
+                # モーターが動くコマンドの場合のみリレーをONにする
                 if command == "move":
-                    # 速度が0でない場合、リレーをONにしてモーター電源を供給
-                    #if left_speed != 0 or right_speed != 0:
-                        #lgpio.gpio_write(self.h, self.relay_pin, 1)
-                    #else:
-                        #lgpio.gpio_write(self.h, self.relay_pin, 0)
+                    if left_speed != 0 or right_speed != 0:
+                        lgpio.gpio_write(self.h, self.relay_pin, 1)  # リレーON
+                    else:
+                        lgpio.gpio_write(self.h, self.relay_pin, 0)  # リレーOFF
                     self.my_motor.move(left_speed, right_speed)
-
-                elif command == "sensor":
-                    # センサープロセスのON/OFF
-                    sensor_type = command_data.get("sensor_type")
-                    bin_val = int(command_data.get("bin"))
-                    self.sensor_ctl(sensor_type, bin_val)
-                    update_oled(mode="info", text_lines=[f"{sensor_type.capitalize()}:", f"{'Started' if bin_val else 'Stopped'}"]) # ステータス表示更新
-
-                elif command == "log":
-                    # ログ記録の開始/停止
-                    bin_val = int(command_data.get("msg"))
-                    self.log_data_csv(bin_val)
-                
-                elif command == "io":
-                    # GPIO制御
-                    if self.mcp:
-                        c_type = command_data.get("type")
-                        pin = int(command_data.get("pin", 0))
-                        with self.mcp_lock:
-                            try:
-                                if c_type == "setup":
-                                    mode_str = command_data.get("mode", "out")
-                                    mode = MCP23017.INPUT if mode_str == "in" else MCP23017.OUTPUT
-                                    pull_up = True if mode == MCP23017.INPUT else False
-                                    self.mcp.setup(pin, mode, pull_up=pull_up)
-                                elif c_type == "write":
-                                    val = int(command_data.get("val", 0))
-                                    self.mcp.output(pin, 1 if val else 0)
-                            except Exception as e:
-                                self.get_logger().error(f"IO Command Error: {e}")
-
                 else:
-                    # 安全停止
-                    self.my_motor.move(0, 0)
-                    #lgpio.gpio_write(self.h, self.relay_pin, 0)
+                    self.my_motor.move(0, 0)  # 安全のため停止
+                    lgpio.gpio_write(self.h, self.relay_pin, 0)  # リレーOFF
+                    
+                self.get_logger().info(f"Motors set to Left: {left_speed}, Right: {right_speed}")
 
         except queue.Empty:
             pass
         except Exception as e:
             self.get_logger().error(f"Error processing command: {e}")
     
-    def sensor_ctl(self, sensor_type, bin_val):
-        """
-        ROSノード（ドライバ）をサブプロセスとして起動・停止する。
-        bin_val: 1=Start, 0=Stop
-        """
-        env = os.environ.copy()
-        if sensor_type == "cam":
-            proc_attr = "proc_cam"
-            command = [
-                "ros2", "run", "camera_ros", "camera_node", 
-                "--ros-args", 
-                "-p", "format:=YUYV", 
-                "-p", "width:=320",       # 横幅を320ピクセルに（通常は640）
-                "-p", "height:=240",      # 高さを240ピクセルに（通常は480）
-                "-p", "frame_rate:=5.0",# FPSを5に
-                "-r", f"__ns:=/{CURRENT_ROBOT_ID}" 
-            ]
-            log_prefix = "Camera"
-            kill_pattern = "camera_ros" 
-
-        elif sensor_type == "imu":
-            proc_attr = "proc_imu"
-            command = ["ros2", "launch", "bno055", "bno055.launch.py",
-                       f"namespace:={CURRENT_ROBOT_ID}"
-                       ]
-            log_prefix = "IMU"
-            kill_pattern = "bno055"
-
-        elif sensor_type == "gps":
-            proc_attr = "proc_gps"
-            command = ["ros2", "run", "gpsd_driver", "gpsd_client_node",
-                       "--ros-args",
-                       "-r", 
-                       f"/gps/fix:=/{CURRENT_ROBOT_ID}/gps/fix"]
-            log_prefix = "GPS"
-            kill_pattern = "gpsd_client_node"
-
-        else:
-            self.get_logger().error(f"Unknown sensor type specified: {sensor_type}")
-            return
-
-        current_proc = getattr(self, proc_attr)
-
-        if bin_val == 1:
-            # 起動処理
-            if current_proc and current_proc.poll() is None:
-                self.get_logger().warn(f"{log_prefix} process is already running (managed).")
-                return
-
-            self.get_logger().info(f"Ensuring no zombie {log_prefix} processes exist...")
-            force_kill_os_process(kill_pattern)
-            time.sleep(0.5)
-
-            try:
-                self.get_logger().info(f"Starting {log_prefix}...")
-                new_proc = subprocess.Popen(
-                    command, 
-                    start_new_session=True, # プロセスグループを分離
-                    stdout=subprocess.DEVNULL, 
-                    stderr=subprocess.DEVNULL,
-                    env=env 
-                )
-                setattr(self, proc_attr, new_proc)
-                self.get_logger().info(f"{log_prefix} started. PID: {new_proc.pid}")
-            except Exception as e:
-                self.get_logger().error(f"Failed to start {log_prefix}: {e}")
-
-        else:
-            # 停止処理
-            self.get_logger().info(f"Stopping {log_prefix}...")
-            if current_proc:
-                self._stop_subprocess(current_proc, log_prefix)
-                setattr(self, proc_attr, None)
-            
-            # 念のため強制killも実行
-            force_kill_os_process(kill_pattern)
-            self.get_logger().info(f"{log_prefix} stopped.")
-
-    def _stop_subprocess(self, proc, name):
-        """サブプロセスへSIGINT -> SIGKILLを送信して停止させる"""
-        if proc.poll() is not None: return 
-        try:
-            pgid = os.getpgid(proc.pid)
-            self.get_logger().info(f"Sending SIGINT to {name} (PGID: {pgid})...")
-            os.killpg(pgid, signal.SIGINT)
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.get_logger().warn(f"{name} did not stop. Sending SIGKILL...")
-                os.killpg(pgid, signal.SIGKILL)
-                proc.wait(timeout=1)
-        except ProcessLookupError:
-            pass 
-        except Exception as e:
-            self.get_logger().error(f"Error stopping {name}: {e}")
-
-    def log_data_csv(self, bin_command):
-        """CSVログ記録の開始と終了処理"""
-        if bin_command == 1 and not self.is_logging:
-            try:
-                os.makedirs(self.log_directory, exist_ok=True)
-                self.is_logging = True
-                base_filename = datetime.now().strftime("%Y%m%d_%H%M%S")
-                # 書き込み中は _temp を付け、完了時にリネームする
-                self.temp_log_path = os.path.join(self.log_directory, f"{base_filename}_temp.csv")
-                self.final_log_path = os.path.join(self.log_directory, f"{base_filename}.csv")
-                
-                self.get_logger().info(f"Starting new log. Writing to temporary file: {self.temp_log_path}")
-                self.log_file = open(self.temp_log_path, 'w', newline='')
-                self.csv_writer = csv.writer(self.log_file)
-
-                # CSVヘッダー
-                header = [
-                    "timestamp_sec", "timestamp_curr", 
-                    "orient_x", "orient_y", "orient_z", "orient_w",
-                    "compass",
-                    "ang_vel_x", "ang_vel_y", "ang_vel_z", 
-                    "lin_accel_x", "lin_accel_y", "lin_accel_z",
-                    "mag_x", "mag_y", "mag_z",
-                    "gps_status", "latitude", "longitude", "altitude", "gps_h_err", "gps_v_err",
-                    "temperature_celsius", "pressure_hpa", "humidity_percent",
-                    "wifi_ssid", "wifi_signal_strength",
-                    "cpu_temperature"
-                ]
-                self.csv_writer.writerow(header)
-                self.log_timer = self.create_timer(0.1, self._write_log_callback)
-
-            except (IOError, OSError) as e:
-                self.get_logger().error(f"Failed to start logging: {e}")
-                self.is_logging = False 
-
-        elif bin_command == 0 and self.is_logging:
-            self.is_logging = False
-            if self.log_timer:
-                self.log_timer.cancel()
-                self.log_timer = None
-            if self.log_file:
-                self.log_file.close()
-                self.log_file = None
-                self.csv_writer = None
-            try:
-                if self.temp_log_path and os.path.exists(self.temp_log_path):
-                    os.rename(self.temp_log_path, self.final_log_path)
-                    self.get_logger().info(f"Log file finalized: {self.final_log_path}")
-            except (IOError, OSError) as e:
-                self.get_logger().error(f"Failed to rename log file: {e}")
-            self.temp_log_path = None
-            self.final_log_path = None
-        
-    def _write_log_callback(self,hz=10):
-        """定期的にセンサーデータをCSVに書き込む"""
-        if not self.is_logging or not self.csv_writer: return
-        with imu_lock:
-            imu_msg = latest_imu_msg
-            mag_msg = latest_mag_msg
-        with gps_lock:
-            gps_msg = latest_gps_msg
-        with system_info_lock:
-            system_info = latest_system_info.copy()
-        
-        bme_data = None
-        with bme_lock:
-            if latest_bme_data: bme_data = latest_bme_data.copy()
-
-        row = [time.time(), datetime.now().isoformat()]
-
-        if imu_msg:
-            q = imu_msg.orientation
-            yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-            compass = (90.0 - math.degrees(yaw)) % 360.0
-            row.extend([
-                imu_msg.orientation.x, imu_msg.orientation.y, imu_msg.orientation.z, imu_msg.orientation.w,
-                compass,
-                imu_msg.angular_velocity.x, imu_msg.angular_velocity.y, imu_msg.angular_velocity.z, 
-                imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z
-            ])
-        else:
-            row.extend([None] * 11)
-
-        row.extend([mag_msg.magnetic_field.x, mag_msg.magnetic_field.y, mag_msg.magnetic_field.z] if mag_msg else [None, None, None])
-        if gps_msg:
-            is_no_fix = (gps_msg.status.status == -1) or math.isnan(gps_msg.latitude)
-            lat = 403.0 if is_no_fix else gps_msg.latitude
-            lon = 403.0 if is_no_fix else gps_msg.longitude
-            alt = 403.0 if is_no_fix else gps_msg.altitude
-            
-            h_err = 403.0
-            v_err = 403.0
-            if not is_no_fix and len(gps_msg.position_covariance) == 9:
-                cov_e = gps_msg.position_covariance[0]
-                cov_n = gps_msg.position_covariance[4]
-                cov_u = gps_msg.position_covariance[8]
-                if cov_e >= 0 and cov_n >= 0:
-                    h_err = math.sqrt(cov_e + cov_n)
-                if cov_u >= 0:
-                    v_err = math.sqrt(cov_u)
-            
-            row.extend([gps_msg.status.status, lat, lon, alt, h_err, v_err])
-        else:
-            row.extend([-1, 403.0, 403.0, 403.0, 403.0, 403.0])
-        
-        if bme_data:
-            row.append(bme_data.get('temperature'))
-            row.append(bme_data.get('pressure'))
-            row.append(bme_data.get('humidity'))
-        else:
-            row.extend([None, None, None])
-
-        row.append(system_info.get('wifi_ssid'))
-        row.append(system_info.get('wifi_strength'))
-        row.append(system_info.get('cpu_temp')) 
-        
-        self.csv_writer.writerow(row)
-        self.log_file.flush()
-        
-        
-
     def cleanup(self):
-        """終了時のリソース解放"""
-        self.get_logger().info("Cleaning up resources...")
-        if self.is_logging: self.log_data_csv(0)
-        
-        # BME280終了
-        if self.bme280:
-            try: self.bme280.close()
-            except Exception: pass
-            self.bme280 = None
-
-        # MCP23017終了
-        if self.mcp:
-            try:
-                with self.mcp_lock:
-                    self.mcp.output(0, 0)
-                    self.mcp.cleanup()
-            except Exception: pass
-            self.mcp = None
-
-        # サブプロセス停止
-        if self.proc_cam: self._stop_subprocess(self.proc_cam, "Camera")
-        if self.proc_imu: self._stop_subprocess(self.proc_imu, "IMU")
-        if self.proc_gps: self._stop_subprocess(self.proc_gps, "GPS")
-
-        # 念のため名前でkill
-        force_kill_os_process("camera_node")
-        force_kill_os_process("bno055")
-        force_kill_os_process("gpsd_client")
-
-        # モーター/GPIO終了
-        if self.h:
-            if self.my_motor:
-                self.my_motor.move(0, 0)
-                self.my_motor.cleanup()
-            try:
-                #lgpio.gpio_write(self.h, self.relay_pin, 0)
-                lgpio.gpiochip_close(self.h)
-            except: pass
-            self.h = None
-            self.my_motor = None
+        """プログラム終了時にリソースを安全に解放する"""
+        if self.h and self.my_motor:
+            self.get_logger().info("Cleaning up GPIO resources...")
+            self.my_motor.move(0, 0) # 安全のためモーターを停止
+            self.my_motor.cleanup() # モーターリソースを解放
+            lgpio.gpio_write(self.h, self.relay_pin, 0) # リレーをOFF
+            lgpio.gpiochip_close(self.h) # GPIOハンドルを解放
             
-        self.get_logger().info("Cleanup finished.")
 
-# ==========================================================
-# データ変換ヘルパー
-# ==========================================================
+def run_ros_node(cmd_queue, shutdown_evt):
+    print("ROS Node Thread Started")
+    rclpy.init()
+    ros_node = RosSubscriberNode(cmd_queue)
+    
+    try:
+        # ros_nodeの初期化に失敗した場合は、spinを呼ばずに終了
+        if ros_node.my_motor:
+            # shutdown_evtがセットされるまでループを続ける
+            while not shutdown_evt.is_set():
+                # 0.1秒のタイムアウト付きでROSのイベントを一度だけ処理する
+                # これにより、ループがCPUを100%消費するのを防ぎ、
+                # shutdown_evtをチェックする機会を定期的に作る
+                rclpy.spin_once(ros_node, timeout_sec=0.1)
+        else:
+            print("ERROR: ROS Node could not start due to motor initialization failure.")
+    
+    except Exception as e:
+        # 通常はここに到達しないはずだが、念のため
+        print(f"An exception occurred in ROS thread: {e}")
+        
+    finally:
+        # ループが終了したら（つまりシャットダウンが要求されたら）、後処理を実行
+        print("ROS Node Thread is shutting down...")
+        ros_node.cleanup()
+        ros_node.destroy_node()
+        rclpy.shutdown()
+        print("ROS Node Thread has been shut down successfully.")
+
+
+
 def imu_to_dict(imu_msg: Imu):
-    if not imu_msg: return None
+    if not imu_msg:
+        return None
     return {
         'header': {
             'stamp': {'sec': imu_msg.header.stamp.sec, 'nanosec': imu_msg.header.stamp.nanosec},
@@ -1379,775 +160,124 @@ def imu_to_dict(imu_msg: Imu):
         }
     }
 
-def gps_to_dict(gps_msg: NavSatFix):
-    if not gps_msg:
-        return {
-            'header': {'stamp': {'sec': 0, 'nanosec': 0}, 'frame_id': 'no_gps'},
-            'status': {'status': -1, 'service': 0},
-            'latitude': 403.0,
-            'longitude': 403.0,
-            'altitude': 403.0,
-            'h_err': 403.0,
-            'v_err': 403.0,
-            'position_covariance': [0.0]*9,
-            'position_covariance_type': 0
-        }
-    
-    is_no_fix = (gps_msg.status.status == -1) or math.isnan(gps_msg.latitude)
-    lat = 403.0 if is_no_fix else gps_msg.latitude
-    lon = 403.0 if is_no_fix else gps_msg.longitude
-    alt = 403.0 if is_no_fix else gps_msg.altitude
-
-    h_err = 403.0
-    v_err = 403.0
-    if not is_no_fix and len(gps_msg.position_covariance) == 9:
-        cov_e = gps_msg.position_covariance[0]
-        cov_n = gps_msg.position_covariance[4]
-        cov_u = gps_msg.position_covariance[8]
-        if cov_e >= 0 and cov_n >= 0:
-            h_err = math.sqrt(cov_e + cov_n)
-        if cov_u >= 0:
-            v_err = math.sqrt(cov_u)
-
-    return {
-        'header': {
-            'stamp': {'sec': gps_msg.header.stamp.sec, 'nanosec': gps_msg.header.stamp.nanosec},
-            'frame_id': gps_msg.header.frame_id
-        },
-        'status': {
-            'status': gps_msg.status.status,
-            'service': gps_msg.status.service
-        },
-        'latitude': lat,
-        'longitude': lon,
-        'altitude': alt,
-        'h_err': h_err,
-        'v_err': v_err,
-        'position_covariance': list(gps_msg.position_covariance),
-        'position_covariance_type': gps_msg.position_covariance_type
-    }
-
-def bme280_to_dict(bme_data: dict):
-    if not bme_data: return None
-    return {
-        'temperature_celsius': bme_data.get('temperature'),
-        'pressure_hpa': bme_data.get('pressure'),
-        'humidity_percent': bme_data.get('humidity')
-    }
-
-# ==========================================================
-# システム状態管理 (Mode & Config)
-# ==========================================================
-class SystemState:
-    def __init__(self):
-        self.mode = config.get("operation_mode", "local") # デフォルトはlocal
-        self.lock = threading.Lock()
-
-    def set_mode(self, new_mode):
-        with self.lock:
-            self.mode = new_mode
-            # config.jsonにも保存
-            current_conf = ConfigManager.load_config()
-            current_conf["operation_mode"] = new_mode
-            ConfigManager.save_config(current_conf)
-
-    def get_mode(self):
-        with self.lock:
-            return self.mode
-
-system_state = SystemState()
-
-# ==========================================================
-# FastAPI アプリケーション定義
-# ==========================================================
-app = FastAPI()
-
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    return DASHBOARD_HTML
-
-@app.get("/api/status")
-async def get_status():
-    """センサーデータのサマリーを返す"""
-    with imu_lock:
-        imu = imu_to_dict(latest_imu_msg) if latest_imu_msg else None
-    with bme_lock:
-        bme = latest_bme_data.copy() if latest_bme_data else None
-    
-    wifi_ssid, wifi_rssi = get_wifi_info()
-    return {
-        "mode": system_state.get_mode(),
-        "robot_id": CURRENT_ROBOT_ID,
-        "sensors": {
-            "imu": imu,
-            "bme": bme,
-            "cpu_temp": get_cpu_temperature(),
-            "wifi": {"ssid": wifi_ssid, "rssi": wifi_rssi}
-        }
-    }
-
-@app.post("/api/move")
-async def local_move(data: dict):
-    """ローカルUIからの移動操作 (Localモード時のみ有効)"""
-    if system_state.get_mode() != "local":
-        return JSONResponse(content={"status": "denied", "reason": "System is in REMOTE mode"}, status_code=403)
-    
-    command_queue.put({
-        "command": "move",
-        "left": data.get("left", 0),
-        "right": data.get("right", 0),
-        "source": "local_dashboard"
-    })
-    return {"status": "ok"}
-
-@app.post("/api/mode")
-async def set_mode(data: dict):
-    """動作モードの切り替え"""
-    new_mode = data.get("mode")
-    if new_mode in ["local", "remote"]:
-        system_state.set_mode(new_mode)
-        # モード切替時に安全のため停止
-        command_queue.put({"command": "move", "left": 0, "right": 0})
-        return {"mode": system_state.get_mode()}
-    return JSONResponse(content={"error": "Invalid mode"}, status_code=400)
-
-# --- API: 設定の取得 ---
-@app.get("/api/config")
-async def get_config_api():
-    return ConfigManager.load_config()
-
-# --- API: 設定の保存 ---
-@app.post("/api/config")
-async def save_config_api(data: dict):
-    """config.jsonの書き換え"""
-    new_conf = ConfigManager.load_config()
-    
-    # 既存のキー名に合わせて更新
-    if "robot_id" in data: new_conf["robot_id"] = data["robot_id"]
-    if "server_ip" in data: new_conf["server_ip"] = data["server_ip"]
-    if "server_port" in data: new_conf["server_port"] = int(data["server_port"])
-    if "server_url" in data: new_conf["server_url"] = data["server_url"]
-    if "operation_mode" in data: new_conf["operation_mode"] = data["operation_mode"]
-    
-    if ConfigManager.save_config(new_conf):
-        global TARGET_URI, CURRENT_ROBOT_ID
-        CURRENT_ROBOT_ID = new_conf["robot_id"]
-        TARGET_URI = build_target_uri(new_conf)
-        
-        # WebSocketクライアントのインスタンスがある場合は、そのURIも更新
-        if 'client' in globals():
-            client.uri = TARGET_URI
-            print(f"Updated running client URI to: {client.uri}")
-        return {"status": "success"}
-    return JSONResponse(content={"error": "Failed to save config"}, status_code=500)
-@app.post("/api/restart")
-async def restart_system():
-    """システムを完全に再起動する"""
-    def delayed_restart():
-        time.sleep(1.0)
-        print("Restarting process...")
-        os.execv(sys.executable, ['python3'] + sys.argv)
-    
-    threading.Thread(target=delayed_restart).start()
-    return {"status": "restarting"}
-# ==========================================================
-# ローカルダッシュボード HTML
-# ==========================================================
-DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Robot Local Dashboard</title>
-    <style>
-        body { font-family: -apple-system, sans-serif; background: #f4f7f9; color: #333; margin: 0; padding: 20px; }
-        .container { max-width: 800px; margin: auto; }
-        .card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .btn { padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; }
-        .btn-move { background: #3b82f6; color: white; width: 100%; margin-top: 10px; }
-        input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; margin-top: 5px; box-sizing: border-box; background: #fafafa; }
-        label { font-size: 0.85em; color: #555; font-weight: bold; display: block; margin-top: 10px; }
-        .hint { font-size: 0.75em; color: #888; margin-top: 4px; }
-        .section-title { border-left: 4px solid #3b82f6; padding-left: 10px; margin: 20px 0 10px 0; font-size: 1.1em; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>ロボット管理ダッシュボード</h1>
-        
-        <div class="grid">
-            <!-- モード設定 -->
-            <div class="card">
-                <h2 class="section-title">動作モード</h2>
-                <select id="modeSelect" style="width:100%; padding:12px; border-radius:6px;" onchange="updateMode()">
-                    <option value="local">LOCAL (ローカル操作)</option>
-                    <option value="remote">REMOTE (基地局サーバー操作)</option>
-                </select>
-                <p id="modeDesc" class="hint">現在: ---</p>
-            </div>
-
-            <!-- ステータス -->
-            <div class="card">
-                <h2 class="section-title">接続状態</h2>
-                <div id="statusList" style="font-size:0.9em;">
-                    Loading status...
-                </div>
-            </div>
-            
-        </div>
-
-        <!-- システム設定 -->
-        <div class="card">
-            <h2 class="section-title">システム設定 (config.json)</h2>
-            
-            <label>Robot ID</label>
-            <input type="text" id="conf_id" placeholder="例: robot01">
-
-            <div style="display: flex; gap: 15px; margin-top: 10px;">
-                <div style="flex: 3;">
-                    <label>サーバー IPアドレス</label>
-                    <input type="text" id="conf_ip" placeholder="192.168.x.x">
-                </div>
-                <div style="flex: 1;">
-                    <label>ポート</label>
-                    <input type="number" id="conf_port" placeholder="8000">
-                </div>
-            </div>
-            <p class="hint">※URIが空の時にこのIP/ポートが使用されます。</p>
-
-            <label style="margin-top: 20px;">サーバー固定 URI (WebSocket)</label>
-            <input type="text" id="conf_url" placeholder="ws://example.com/ws/robot/">
-            <p class="hint">※ここに入力がある場合、IP設定より優先されます。</p>
-
-            <button class="btn btn-move" onclick="saveConfig()">設定を保存して反映</button>
-        </div>
-        <div class="card">
-            <h2 class="section-title">システム操作</h2>
-            <p class="hint">設定変更後は再起動を行うことで、全てのセンサーと接続設定が完全にリセット・反映されます。</p>
-            <button class="btn btn-restart" style="background:#6b7280; color:white; width:100%;" onclick="restartSystem()">システムを再起動 (Reflesh)</button>
-        </div>
-    </div>
-
-    <script>
-        // --- 1. ページ読み込み時に1回だけ実行する処理 (Configの読み込み) ---
-        async function loadInitialConfig() {
-            try {
-                const resConf = await fetch('/api/config');
-                const conf = await resConf.json();
-                
-                // 入力欄に値をセット
-                document.getElementById('conf_id').value = conf.robot_id || "";
-                document.getElementById('conf_ip').value = conf.server_ip || "";
-                document.getElementById('conf_port').value = conf.server_port || 8000;
-                document.getElementById('conf_url').value = conf.server_url || "";
-                document.getElementById('modeSelect').value = conf.operation_mode || "local";
-                
-                console.log("Config loaded once.");
-            } catch(e) {
-                console.error("Failed to load initial config", e);
-            }
-        }
-
-        // --- 2. 定期的に実行する処理 (センサー状態の更新) ---
-        async function updateStatus() {
-            try {
-                const resStat = await fetch('/api/status');
-                const stat = await resStat.json();
-                
-                // モード表示（バッジとテキストのみ。セレクトボックスは勝手に書き換えない）
-                const badge = document.getElementById('modeBadge');
-                if (badge) {
-                    badge.innerText = stat.mode.toUpperCase();
-                    badge.className = 'mode-badge mode-' + stat.mode;
-                }
-                document.getElementById('modeDesc').innerText = "現在稼働モード: " + stat.mode.toUpperCase();
-
-                // センサー情報のみを更新
-                document.getElementById('statusList').innerHTML = `
-                    ID: <b>${stat.robot_id}</b><br>
-                    CPU温度: <b>${stat.sensors.cpu_temp} ℃</b><br>
-                    Wi-Fi: <b>${stat.sensors.wifi.ssid}</b> (${stat.sensors.wifi.rssi} dBm)
-                `;
-            } catch(e) {
-                console.warn("Status update failed (server might be busy)");
-            }
-        }
-
-        // --- 3. ボタン操作などのイベント処理 ---
-        
-        async function updateMode() {
-            const m = document.getElementById('modeSelect').value;
-            await fetch('/api/mode', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({mode: m})
-            });
-            // 即座にステータス表示に反映
-            updateStatus();
-        }
-
-        async function saveConfig() {
-            const data = {
-                robot_id: document.getElementById('conf_id').value,
-                server_ip: document.getElementById('conf_ip').value,
-                server_port: document.getElementById('conf_port').value,
-                server_url: document.getElementById('conf_url').value,
-                operation_mode: document.getElementById('modeSelect').value
-            };
-            
-            const res = await fetch('/api/config', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(data)
-            });
-
-            if(res.ok) {
-                alert("設定を保存しました。反映にはプログラムの再起動を推奨します。");
-            } else {
-                alert("保存に失敗しました。");
-            }
-        }
-        async function restartSystem() {
-            if(!confirm("システム（Pythonプロセス）を再起動します。よろしいですか？")) return;
-            const res = await fetch('/api/restart', { method: 'POST' });
-            if(res.ok) {
-                alert("再起動命令を送信しました。3秒ほど待ってからページをリロードしてください。");
-                setTimeout(() => location.reload(), 3000);
-            }
-        }
-
-        // --- 実行開始 ---
-        // 設定は最初の一回だけ読み込む（これで入力がリセットされなくなる）
-        loadInitialConfig();
-        
-        // ステータス（センサー値）だけを3秒おきに更新
-        setInterval(updateStatus, 3000);
-        updateStatus(); // 初回実行
-    </script>
-</body>
-</html>
-"""
-
-# ==========================================================
-# WebSocketクライアント
-# 基地局サーバーとの通信を担当
-# ==========================================================
+# --- WebSocketクライアント ---
 class RobotWebsocketClient:
-    def __init__(self, ros_node, script_manager, robot_id="robot03", server_uri="ws://<基地局PCのIPアドレス>:8000/ws/robot/"):
+    def __init__(self, ros_node, robot_id="robot01", server_uri="ws://<基地局PCのIPアドレス>:8000/ws/robot/"):
         self.ros_node = ros_node
-        self.script_manager = script_manager
         self.uri = f"{server_uri}{robot_id}"
         self.bridge = CvBridge()
-        self.ssid, self.strength = get_wifi_info()
-
-        global CURRENT_ROBOT_ID
-        CURRENT_ROBOT_ID = robot_id
-        
-        
-        
-        self.pcs = set()
-        self.webrtc_task = None 
-
+        self.send_camera_data = False
 
     async def run(self):
-        """WebSocket接続を開始し、送受信タスクを並行実行 切断時は自動リトライ"""
-        while True:
-            try:
-                async with websockets.connect(self.uri, ping_interval=20,ping_timeout=20) as websocket:
-                    # 接続成功後の処理
-                    print(f"Connected to server: {self.uri}")
-                    # oledに接続成功を表示
-                    update_oled(text_lines=["", "Connected!", "", ""], clear=True, start_x=5, start_y=5)
-                    await asyncio.sleep(2) # 2秒表示してから通常のステータス表示に戻す
-                    update_oled(mode="connection")
-                    listen_task = asyncio.create_task(self.listen_for_commands(websocket))
-                    send_task = asyncio.create_task(self.send_sensor_data(websocket))
-                    
-                    # どちらかのタスクがエラーで終了するまで待機
-                    done, pending = await asyncio.wait(
-                        [listen_task, send_task],
-                        return_when=asyncio.FIRST_COMPLETED
-                    )
-                    
-                    # 残ったタスクをキャンセル
-                    for task in pending:
-                        task.cancel()
-                    #await asyncio.gather(listen_task, send_task)
-            except asyncio.CancelledError:
-                # プログラム自体の終了要求ならループを抜ける
-                break
-             
-            except Exception as e:
-                print(f"Connection failed: {e}. Retrying in 20 seconds...")
-                #oledに接続失敗を表示
-                update_oled(text_lines=["", "Connection Failed!", "Retrying...", ""], clear=True, start_x=5, start_y=5)
-                await asyncio.sleep(20) # 5秒待ってリトライ
-            
-            
-    async def handle_offer(self, websocket, offer_sdp):
-            """ブラウザからのOfferを受け取り、Answerを返す"""
-            try:
-                print("--- WebRTC: Creating PeerConnection ---")
-                self.pc = RTCPeerConnection()
-                
-                # ビデオトラックを追加
-                self.pc.addTrack(ROSCameraTrack(self.ros_node))
-                print("--- WebRTC: Added Video Track ---")
+        async with websockets.connect(self.uri) as websocket:
+            print(f"Connected to server: {self.uri}")
 
-                # オファーの設定
-                offer = RTCSessionDescription(sdp=offer_sdp, type="offer")
-                await self.pc.setRemoteDescription(offer)
-                print("--- WebRTC: Remote Description Set ---")
+            # サーバーからのコマンド受信タスク
+            listen_task = asyncio.create_task(self.listen_for_commands(websocket))
+            # センサーデータの送信タスク
+            send_task = asyncio.create_task(self.send_sensor_data(websocket))
 
-                # アンサーの作成
-                answer = await self.pc.createAnswer()
-                await self.pc.setLocalDescription(answer)
-                print("--- WebRTC: Local Description Created ---")
-
-                # アンサーを送信（ここに送信ログを追加）
-                payload = {
-                    "type": "webrtc_answer",
-                    "sdp": self.pc.localDescription.sdp
-                }
-                await websocket.send(json.dumps(payload))
-                print("--- WebRTC: Answer Sent to Browser ---")
-
-            except Exception as e:
-                print(f"!!! WebRTC Error !!! : {e}")
-                import traceback
-                traceback.print_exc()
+            await asyncio.gather(listen_task, send_task)
 
     async def listen_for_commands(self, websocket):
-        """サーバーからのJSONコマンドを受信して処理"""
+        """サーバーからコマンドを受信し、ROSノードのキューに入れる"""
         async for message in websocket:
             try:
-                 # --- モードチェックを追加 ---
-                if system_state.get_mode() != "remote":
-                    # Remoteモード以外の場合は、上位からのコマンドを無視する
-                    # (ただし、設定変更やログ取得コマンドは許可しても良い)
-                    continue
-                
                 command_data = json.loads(message)
-                command = command_data.get("command")
                 print(f"Received command: {command_data}")
-                if command == "set_robot_id":
-                    new_id = command_data.get("new_id")
-                    if new_id:
-                        print(f"!!! ID Change Requested: {CURRENT_ROBOT_ID} -> {new_id} !!!")
-                        
-                        # 1. 設定ファイルに保存
-                        if ConfigManager.update_robot_id(new_id):
-                            # 2. ユーザーに通知 (OLED & ログ)
-                            update_oled(text_lines=["", "ID CHANGED!", f"-> {new_id}", "Rebooting..."], clear=True, start_x=0, start_y=0)
-                            
-                            # サーバーに成功レスポンスを返す（切断前に）
-                            await websocket.send(json.dumps({
-                                "type": "info",
-                                "message": f"ID changed to {new_id}. Robot is restarting..."
-                            }))
-                            
-                            await asyncio.sleep(2) # メッセージ送信とOLED表示の待機
-                            
-                            # 3. プログラムの再起動
-                            print("Restarting application...")
-                            # 現在のPythonインタプリタで、現在のスクリプトを引数付きで再実行する
-                            os.execv(sys.executable, ['python3'] + sys.argv)
-                        else:
-                            await websocket.send(json.dumps({"type": "error", "message": "Failed to save config."}))
-                elif command == "check_i2c_devices":
-                    # スキャン実行
-                    devices = scan_i2c_bus(bus_num=1)
-                    
-                    # 結果をフロントに返信
-                    response = {
-                        "type": "i2c_device_list",
-                        "devices": devices
-                    }
-                    await websocket.send(json.dumps(response))
-                    print(f"Sent I2C device list: {devices}")    
-                elif command == "save_code":
-                    code = command_data.get("code")
-                    if code: self.script_manager.save_code(code)
-                elif command == "start_program":
-                    self.script_manager.start_program()
-                elif command == "stop_program":
-                    self.script_manager.stop_program()
-                elif command == "list_log_files":
-                    await self.handle_list_log_files(websocket)
-                elif command == "get_log_file":
-                    filename = command_data.get("filename")
-                    if filename: await self.handle_get_log_file(websocket, filename)
-                    else:
-                        await websocket.send(json.dumps({"type": "error", "message": "'filename' is required."}))
-                elif command == "webrtc_offer":
-                    # 基地局からのWebRTC接続要求を処理する
-                    target_id = command_data.get("target_robot_id") or command_data.get("robot_id")
-                    if target_id and target_id != CURRENT_ROBOT_ID:
-                        continue
-                    sdp = command_data.get("sdp")
-                    
-                    # 既に実行中の Offer タスクがあれば即座にキャンセルして破棄する
-                    if self.webrtc_task and not self.webrtc_task.done():
-                        self.webrtc_task.cancel()
-                        print("Cancelled ongoing previous WebRTC offer task.")
-
-                    # 新しいタスクとして実行
-                    self.webrtc_task = asyncio.create_task(self.handle_webrtc_offer(websocket, sdp))
+                if command_data.get("command") == "sensor" and command_data.get("sensor_type") == "cam":
+                    self.send_camera_data = bool(command_data.get("bin", 0))
+                    print(f"Camera transmission set to: {self.send_camera_data}")
                 else:
-                    # その他のコマンドはROSノードのコマンドキューへ
                     self.ros_node.command_queue.put(command_data)
-
             except json.JSONDecodeError:
                 print(f"Received non-JSON message: {message}")
-            except Exception as e:
-                print(f"Error processing command: {e}")
-                
-    async def handle_webrtc_offer(self, websocket, sdp):
-        """WebRTCのOfferを受け取り、Answerを返すシグナリング処理"""
-        print("Received WebRTC Offer. Establishing Peer Connection...")
-        for old_pc in list(self.pcs):
-            try:
-                await old_pc.close()
-                print("Closed previous PeerConnection.")
-            except Exception as e:
-                print(f"Error closing old PeerConnection: {e}")
-        self.pcs.clear()
-        
-        ice_servers = [
-            RTCIceServer(
-                urls=["stun:219.94.244.174:3478"]
-            ),
-            RTCIceServer(
-                urls=[
-                    #"turn:219.94.244.174:3478?transport=udp",
-                    "turn:219.94.244.174:3478?transport=tcp",
-                    #"turn:219.94.244.174:3478"     
-                ],
-                username="catuser",
-                credential="catpassword"
-            )
-        ]
-        
-        config = RTCConfiguration(iceServers=ice_servers)
-        # 新しいピア接続を作成
-        pc = RTCPeerConnection(configuration=config)
-        self.pcs.add(pc)
-        print("Created new RTCPeerConnection for WebRTC session.{Current PC count: " + str(len(self.pcs)) + "}")
 
-        # 接続状態の監視
-        @pc.on("connectionstatechange")
-        async def on_connectionstatechange():
-            print(f"WebRTC Connection State is {pc.connectionState}")
-            #print(pc.localDescription.sdp)
-            if pc.connectionState in["failed", "closed"]:
-                self.pcs.discard(pc)
-        @pc.on("icecandidate")
-        def on_icecandidate(candidate):
-            print("New ICE candidate gathered:")
-            print(candidate)
-        # @pc.on("icecandidate")
-        # async def on_icecandidate(candidate):
-        #     if candidate:
-        #         await websocket.send(json.dumps({
-        #             "type": "candidate",
-        #             "candidate": candidate.to_sdp()
-        #         }))
-        #         print("Sent ICE candidate to server:")
-        #         print(candidate)
-        @pc.on("iceconnectionstatechange")
-        async def on_iceconnectionstatechange():
-            print("ICE Connection State:", pc.iceConnectionState)
-
-        # 用意されているカメラトラックをPeerConnectionに追加
-        pc.addTrack(ROSCameraTrack(self.ros_node))
-
-        try:
-            # 基地局からのOfferをリモート情報としてセット
-            offer = RTCSessionDescription(sdp=sdp, type="offer")
-            await pc.setRemoteDescription(offer)
-
-            # ロボット側のAnswerを作成してローカル情報としてセット
-            answer = await pc.createAnswer()
-            await pc.setLocalDescription(answer)
-            
-            # 修正ポイント 3: タイムアウト3秒でICE gatheringが完了するのを待つ
-            timeout = 3.0
-            start_time = asyncio.get_event_loop().time()
-            while pc.iceGatheringState != "complete":
-                await asyncio.sleep(0.1)
-                if asyncio.get_event_loop().time() - start_time > timeout:
-                    print("!!! WebRTC: ICE gathering timed out, sending partial SDP !!!")
-                    break
-                    
-            # WebSocket経由で基地局にAnswerを返信
-            response = {
-                "type": "webrtc_answer",
-                "sdp": pc.localDescription.sdp
-            }
-            await websocket.send(json.dumps(response))
-            print("Sent WebRTC Answer.")
-            
-        except Exception as e:
-            print(f"WebRTC Negotiation Error: {e}")
-            self.pcs.discard(pc)
-            
     async def send_sensor_data(self, websocket):
-        """定期的にセンサー情報と画像をサーバーへ送信"""
+        """ROSから取得したセンサーデータをサーバーに送信し続ける"""
         while True:
-            # データのスナップショット取得
+            # IMUデータの送信 (JSON形式)
             with imu_lock:
                 imu_msg = latest_imu_msg
-                mag_msg = latest_mag_msg
-            with image_lock:
-                image_msg = latest_image_msg
-            with gps_lock:
-                gps_msg = latest_gps_msg
-            bme_read = None
-            with bme_lock:
-                if latest_bme_data: bme_read = latest_bme_data.copy()
-            
-            payload = {"type": "sensor_data", "data": {}}
-            
-            # --- 各種センサーデータの格納 ---
             if imu_msg:
-                payload["data"]["imu"] = imu_to_dict(imu_msg)
-                try:
-                    q = imu_msg.orientation
-                    yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-                    payload["data"]["compass"] = (90.0 - math.degrees(yaw)) % 360.0
-                except Exception:
-                    payload["data"]["compass"] = None
-            
-            if mag_msg:
-                payload["data"]["mag"] = {
-                    'header': {'stamp': {'sec': mag_msg.header.stamp.sec, 'nanosec': mag_msg.header.stamp.nanosec}, 'frame_id': mag_msg.header.frame_id},
-                    'magnetic_field': {'x': mag_msg.magnetic_field.x, 'y': mag_msg.magnetic_field.y, 'z': mag_msg.magnetic_field.z}
-                }
-            payload["data"]["gps"] = gps_to_dict(gps_msg)
-            
-            if bme_read: payload["data"]["bme280"] = bme280_to_dict(bme_read)
-            else: payload["data"]["bme280"] = None
-                
-            ssid, strength = get_wifi_info()
-            cpu_temp = get_cpu_temperature() 
-            with system_info_lock:
-                if ssid and strength:
-                    latest_system_info['wifi_ssid'] = ssid
-                    latest_system_info['wifi_strength'] = strength
-                latest_system_info['cpu_temp'] = cpu_temp 
-
-            payload["data"]["wifi"] = {"ssid": ssid, "signal_strength": strength}
-            payload["data"]["cpu_temperature"] = cpu_temp
-
-            if payload["data"]:
+                imu_data = imu_to_dict(imu_msg) # imu_to_dict関数は現在のコードから流用
+                # データ種別をヘッダーとして付与
+                payload = {"type": "sensor_data", "data": {"imu": imu_data}}
                 await websocket.send(json.dumps(payload))
 
-            await asyncio.sleep(0.033)  # 約30fps
+            # 画像データの送信 (Base64 JSON形式)
+            if self.send_camera_data:
+                cv_image = None
+                with image_lock:
+                    if latest_image_msg:
+                        try:
+                            cv_image = self.bridge.imgmsg_to_cv2(latest_image_msg, desired_encoding='bgr8')
+                        except Exception as e:
+                            print(f"Image conversion error: {e}")
 
-    async def handle_list_log_files(self, websocket):
-        """ログディレクトリ内のファイル一覧を送信"""
-        try:
-            log_dir = self.ros_node.log_directory
-            if not os.path.isdir(log_dir):
-                await websocket.send(json.dumps({"type": "error", "message": f"Log directory not found: {log_dir}"}))
-                return
-            files = [f for f in os.listdir(log_dir) if f.endswith('.csv') and not f.endswith('_temp.csv')]
-            await websocket.send(json.dumps({"type": "log_file_list", "files": files}))
-        except Exception as e:
-            await websocket.send(json.dumps({"type": "error", "message": str(e)}))
+                if cv_image is not None:
+                    cv_image_flipped = cv2.flip(cv_image, -1)
+                    ret, frame = cv2.imencode('.jpg', cv_image_flipped, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                    if ret:
+                        import base64
+                        b64_image = base64.b64encode(frame).decode('utf-8')
+                        payload = {"type": "sensor_data", "data": {"image": b64_image}}
+                        await websocket.send(json.dumps(payload))
 
-    async def handle_get_log_file(self, websocket, filename):
-        """指定されたログファイルの内容を送信"""
-        try:
-            if ".." in filename or filename.startswith("/"): raise ValueError("Invalid filename specified.")
-            log_dir = self.ros_node.log_directory
-            file_path = os.path.join(log_dir, filename)
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    file_content = f.read()
-                await websocket.send(json.dumps({"type": "log_file_content", "filename": filename, "data": file_content}))
-            else:
-                await websocket.send(json.dumps({"type": "error", "message": "File not found.", "filename": filename}))
-        except Exception as e:
-            await websocket.send(json.dumps({"type": "error", "message": str(e), "filename": filename}))
+            await asyncio.sleep(0.033) # 30fps程度
 
+# --- メイン処理 ---
 def run_ros_spin(node):
-    """ROSイベントループを実行するスレッド関数"""
+    """
+    指定されたROSノードのイベントループを実行する。
+    """
     print("ROS spin thread started.")
-    try: rclpy.spin(node)
-    except rclpy.executors.ExternalShutdownException: pass
+    try:
+        rclpy.spin(node)
+    except rclpy.executors.ExternalShutdownException:
+        # rclpy.shutdown()が呼ばれるとspinは例外を発生させて終了する
+        print("ROS spin thread gracefully stopped.")
     finally:
-        node.cleanup() 
+        # スレッドが終了する際にノードを破棄する
+        node.cleanup() # GPIOリソースの解放
         node.destroy_node()
         print("ROS Node destroyed.")
 
 
+# --- メイン処理 ---
 if __name__ == "__main__":
+    # 変更点 1: プロセスの開始時点でROSを一度だけ初期化する
     rclpy.init()
 
     command_queue = queue.Queue()
+    # 変更点 2: ROSノードのインスタンスをメインスレッドで生成する
     ros_node = RosSubscriberNode(command_queue)
-    script_manager = ScriptManager(ros_node)
-
-    # 物理ボタン監視スレッド
-    def button_watcher():
-        while True:
-            script_manager.check_button()
-            time.sleep(0.1)
-
-    button_thread = threading.Thread(target=button_watcher, daemon=True)
-    button_thread.start()
     
-    # ROSスレッド
+    # 変更点 3: ROSのspinを実行するスレッドを開始する
+    #           生成したノードのインスタンスを渡す
     ros_thread = threading.Thread(target=run_ros_spin, args=(ros_node,), daemon=True)
     ros_thread.start()
 
-    # WebSocketクライアント起動
+    # 変更点 4: WebSocketクライアントにも同じノードのインスタンスを渡す
+    #           (主にコマンドキューを共有するために)
+    #           IPアドレスは実際の基地局PCのものに変更してください
     client = RobotWebsocketClient(
         ros_node=ros_node, 
-        script_manager=script_manager,
-        robot_id=CURRENT_ROBOT_ID, # Configから読み込んだID
-        server_uri=TARGET_URI
+        server_uri="ws://192.168.0.101:8000/ws/robot/"
     )
-     #  全ての非同期タスクを管理するエントリポイント
-    async def main_loop():
-        # WebSocketタスク
-        ws_task = asyncio.create_task(client.run())
-        
-        # FastAPIサーバー (uvicorn) タスク
-        # host="0.0.0.0" にすることでLAN内の他PCからアクセス可能に
-        config_uvicorn = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="info")
-        server = uvicorn.Server(config_uvicorn)
-        web_task = asyncio.create_task(server.serve())
-        
-        await asyncio.gather(ws_task, web_task)
-        
-        
+
     try:
+        # メインスレッドで非同期のWebSocketクライアントを実行
         print("Starting WebSocket client...")
-        asyncio.run(main_loop())
+        asyncio.run(client.run())
 
     except KeyboardInterrupt:
         print("Application stopped by user (Ctrl+C).")
         
     finally:
+        # 変更点 5: アプリケーション終了時にROSをクリーンにシャットダウンする
         print("Shutting down rclpy...")
-        
-        if 'client' in locals() and hasattr(client, 'pcs'):
-            for pc in list(client.pcs): # list()でコピーして安全に回す
-                try:
-                    pc.close()
-                except Exception as e:
-                    print(f"Error closing WebRTC: {e}")
-            client.pcs.clear()
         rclpy.shutdown()
+        # ros_threadが終了するのを待つ
         ros_thread.join(timeout=2)
-        try:
-            if 'client' in locals() and hasattr(client, 'bme280') and client.bme280:
-                client.bme280.close()
-        except Exception: pass
-        update_oled(clear=True)
-        
         print("Application has exited.")

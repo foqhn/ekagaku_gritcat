@@ -22,20 +22,23 @@ class OLEDDisplay:
             font_path (str): 使用するTrueTypeフォントのパス。
             font_size (int): フォントサイズ。
         """
+        # デバイスの初期化とフォントの読み込みは分けて扱う
+        # (I2C の接続エラーも OSError なので、同じ try だと「フォントなし」と誤判定してしまう)
         try:
             # I2Cインターフェースの設定
             self.serial = i2c(port=port, address=address)
             # 使用するOLEDディスプレイのドライバと解像度を指定
             self.device = ssd1306(self.serial, width=width, height=height)
-            # フォントの読み込み
-            self.font = ImageFont.truetype(font_path, font_size)
-        except IOError:
-            print(f"警告: フォント '{font_path}' が見つかりません。デフォルトフォントを使用します。")
-            self.font = ImageFont.load_default()
         except Exception as e:
             print(f"エラー: OLEDディスプレイの初期化に失敗しました: {e}")
             print("I2Cの設定や接続を確認してください。 `sudo i2cdetect -y 1` コマンドが役立ちます。")
             raise
+
+        try:
+            self.font = ImageFont.truetype(font_path, font_size)
+        except OSError:
+            print(f"警告: フォント '{font_path}' が見つかりません。デフォルトフォントを使用します。")
+            self.font = ImageFont.load_default()
         self._last_lines = None
 
     def display_text(self, text_lines, start_x=5, start_y=5, line_spacing=20):
