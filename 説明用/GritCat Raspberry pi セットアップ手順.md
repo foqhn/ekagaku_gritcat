@@ -139,7 +139,7 @@
    ```bash
    cd ~/ekagaku_gritcat/grit_ws/src
    git clone https://github.com/flynneva/bno055.git
-   sudo bash ~/ekagaku_gritcat/grit_ws/setup_ros_packages.sh --reset-bno055
+   bash ~/ekagaku_gritcat/grit_ws/setup_ros_packages.sh --reset-bno055
    source ~/.bashrc
    ```
    7. GPS のセットアップ
