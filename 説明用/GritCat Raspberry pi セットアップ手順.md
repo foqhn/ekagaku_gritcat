@@ -160,8 +160,22 @@
    # Other options you want to pass to gpsd
    GPSD_OPTIONS="-F /var/run/gpsd.sock -b -n -r"
    ```
-   9.
-8. スタートアップ設定
+   9. SPIをOFFにする
+   　以下のコマンドを打ち，インターフェース設定を開く
+   ```bash
+   sudo nano /boot/firmware/config.txt
+   ```
+   以下のように編集
+   ```sh
+   [all]
+   # Enable the audio output, I2C and SPI interfaces on the GPIO header. As these
+   # parameters related to the base device-tree they must appear *before* any
+   # other dtoverlay= specification
+   dtparam=audio=on
+   dtparam=i2c_arm=on
+   dtparam=spi=off # ここをoffに変える．
+   ```
+9. スタートアップ設定
 
    1. サービスファイルを作成
 
@@ -226,6 +240,6 @@
 
    3.
 
-9. Wifiの追加・変更方法
+10. Wifiの追加・変更方法
    こちらを参考に
    https://eng-memo.info/blog/netplan/
