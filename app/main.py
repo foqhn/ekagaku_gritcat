@@ -40,8 +40,10 @@ from src.motor_controller import GritMotor
 from src.system_info import get_wifi_info, get_cpu_temperature
 from src.i2c_utils import scan_i2c_bus
 from src.config_manager import ConfigManager
+from src import dashboard_auth
 from src.bme280_lgpio import BME280
-from src.mcp23017 import MCP23017 
+from src.mcp23017 import MCP23017
+from src import vision
 
 import subprocess
 import signal
@@ -79,8 +81,17 @@ image_lock = threading.Lock()
 gps_lock = threading.Lock()
 system_info_lock = threading.Lock()
 bme_lock = threading.Lock()
-debug_image_lock = threading.Lock() 
+debug_image_lock = threading.Lock()
 oled_lock = threading.Lock()
+
+def _show_debug_image(bgr_image):
+    """vision.imshow の表示先: Web UI へ配信する映像を、この画像にしばらく差し替える"""
+    global latest_debug_image, last_debug_update_time
+    with debug_image_lock:
+        latest_debug_image = bgr_image
+        last_debug_update_time = time.time()
+
+vision.set_display_callback(_show_debug_image)
 
 # asyncio の補正: 閉じ終わった UDP トランスポートへの sendto を無視する
 # WebRTC の接続を閉じた後も、aioice (aiortc 内部) の STUN/TURN 再送タイマーが閉じたソケットに送ることがある。
@@ -117,6 +128,37 @@ shutdown_event = threading.Event()
 # 手動操作の move がこの秒数届かなければモーターを止める (ユーザープログラムの move は対象外)
 DEADMAN_TIMEOUT_SEC = 1.0
 MANUAL_MOVE_SOURCES = ("remote", "local_dashboard")
+
+# --- OS の電源操作 (シャットダウン/再起動) ---
+# gritcat ユーザーで動いているため sudo が必要。sudoers にはこの2コマンドだけを許可する
+# (インストール: sudo bash app/tools/install_wifi_helper.sh)
+POWER_COMMANDS = {
+    "poweroff": ["/usr/bin/systemctl", "poweroff"],
+    "reboot": ["/usr/bin/systemctl", "reboot"],
+}
+POWER_LABELS = {"poweroff": "シャットダウン", "reboot": "再起動"}
+POWER_PERMISSION_MISSING = ("電源操作の権限がありません。ロボット上で "
+                            "sudo bash app/tools/install_wifi_helper.sh を実行してください。")
+
+def can_control_power(action):
+    """パスワードなしで電源操作コマンドを実行できるか (sudo -l で確認するだけで実行はしない)"""
+    try:
+        r = subprocess.run(["sudo", "-n", "-l", *POWER_COMMANDS[action]],
+                           capture_output=True, timeout=5)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+def run_power_command(action):
+    """OS をシャットダウン/再起動する。成功すればこの後プロセスは終了する。失敗時は False"""
+    try:
+        r = subprocess.run(["sudo", "-n", *POWER_COMMANDS[action]], capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            return True
+        print(f"Power command failed ({action}): {r.stderr.strip()}")
+    except Exception as e:
+        print(f"Power command error ({action}): {e}")
+    return False
 
 SENSOR_DISPLAY_NAMES = {"cam": "カメラ", "imu": "IMU", "gps": "GPS"}
 # センサーノード (ros2 run/launch) の出力の保存先。起動のたびに上書き
@@ -681,7 +723,33 @@ class RobotController:
         output(f"[Robot]: {text}")
 
     # ----------------------------------------------------------
-    #  画像処理 (OpenCV)
+    #  カメラ画像の取得 (新方式: 画像を値として返し、処理は vision モジュールで行う)
+    #    img = robot.camera()
+    #    mask = vision.color_mask(img, "red")
+    #    r = vision.largest_region(mask)
+    # ----------------------------------------------------------
+    CAMERA_WAIT_SEC = 3.0  # カメラ起動直後など、画像が届くまで待つ最大秒数
+
+    def camera(self):
+        """最新のカメラ画像を RGB の NumPy 配列 (高さ×幅×3, uint8) で返す。正立に補正済み"""
+        deadline = time.time() + self.CAMERA_WAIT_SEC
+        while True:
+            self._check_stop()
+            with image_lock:
+                msg = latest_image_msg
+                age = time.monotonic() - latest_image_time
+            if msg is not None and age < SNAPSHOT_MAX_IMAGE_AGE_SEC:
+                break
+            if time.time() > deadline:
+                raise RuntimeError("カメラ画像がありません。Web UI でカメラを ON にしてください。")
+            time.sleep(0.05)
+        bgr = self.ros_node.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        # カメラ取り付け向きに合わせて正立にし、MATLAB と同じ RGB の並びにする
+        return cv2.cvtColor(cv2.flip(bgr, -1), cv2.COLOR_BGR2RGB)
+
+    # ----------------------------------------------------------
+    #  画像処理 (OpenCV) ※ 旧方式 (レガシー)。ロボット内部に画像を1枚保持して処理する。
+    #  既存のプログラムのために残している。新しいプログラムは camera() と vision モジュールを使う
     # ----------------------------------------------------------
     def get_image(self):
         """
@@ -998,7 +1066,9 @@ class ScriptManager:
             "time": time,
             "np": np,
             "print": program_print,  # 出力を Web UI のコンソールにも転送
-            "math": __import__("math")
+            "math": __import__("math"),
+            "vision": vision,  # 画像処理 (MATLAB 風、RGB)
+            "cv2": cv2,        # 上級者向け: OpenCV を直接使う (OpenCV の画像は BGR の順なので注意)
         }
         try:
             print(">>> User Script Started >>>")
@@ -1157,21 +1227,33 @@ class ScriptManager:
             if val == 1: break
             time.sleep(0.1)
     def system_shutdown(self):
-        """システムを安全に停止し、電源を切る"""
-        print("!!! System Shutdown Sequence Started !!!")
-        
+        """システムを安全に停止し、電源を切る (本体ボタン8秒長押し)"""
+        self.system_power("poweroff")
+
+    def system_power(self, action):
+        """
+        ユーザープログラムとモーターを止めてから OS をシャットダウン/再起動する。
+        action: "poweroff" | "reboot"  (本体ボタンとローカルダッシュボードの両方から呼ばれる)
+        """
+        label = POWER_LABELS[action]
+        print(f"!!! System {action} Sequence Started !!!")
+
         # 1. 実行中のユーザープログラムを停止
         self.stop_program()
-        
-        # 2. ディスプレイに通知
-        update_oled(text_lines=["", "  SHUTTING DOWN", "  PLEASE WAIT...", ""], clear=True, start_x=0, start_y=0)
-        
+
+        # 2. ディスプレイと Web UI に通知
+        oled_text = "  SHUTTING DOWN" if action == "poweroff" else "  REBOOTING"
+        update_oled(text_lines=["", oled_text, "  PLEASE WAIT...", ""], clear=True, start_x=0, start_y=0)
+        emit_robot_event("robot_event", f"ロボット本体を{label}します。", level="warning")
+
         # 3. モーターの安全停止（念押し）
         self.ros_node.command_queue.put({"command": "move", "left": 0, "right": 0})
-        
-        # 4. 少し待機してOSにシャットダウン命令を出す
+
+        # 4. 少し待機して (通知の送信・モーター停止を待つ) OS に命令を出す
         time.sleep(2.0)
-        os.system("sudo shutdown -h now")
+        if not run_power_command(action):
+            update_oled(text_lines=["", f"  {action.upper()}", "  FAILED", ""], clear=True, start_x=0, start_y=0)
+            emit_robot_event("robot_event", f"{label}に失敗しました。{POWER_PERMISSION_MISSING}", level="error")
 
 
 # ==========================================================
@@ -1833,6 +1915,73 @@ system_state = SystemState()
 # ==========================================================
 app = FastAPI()
 
+# --- ローカルダッシュボードのパスワード認証 ---
+# パスワードが設定されていれば、ログイン画面と認証用 API 以外はログインしないと使えない。
+# 未設定の間は従来どおり開けるが、画面上部でパスワードの設定を促す。
+SESSION_COOKIE = "gritcat_session"
+AUTH_PUBLIC_PATHS = {"/login", "/api/login", "/api/auth/status"}
+
+@app.middleware("http")
+async def require_dashboard_login(request: Request, call_next):
+    path = request.url.path
+    if path in AUTH_PUBLIC_PATHS or not dashboard_auth.is_password_set():
+        return await call_next(request)
+    if dashboard_auth.is_valid_session(request.cookies.get(SESSION_COOKIE)):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse(content={"ok": False, "error": "ログインが必要です", "login_required": True}, status_code=401)
+    return HTMLResponse(LOGIN_HTML, status_code=401)
+
+def _set_session_cookie(response, token):
+    # HTTP (LAN 内) で使うため secure は付けない。JS から読めないよう httponly、他サイトから送られないよう strict
+    response.set_cookie(SESSION_COOKIE, token, max_age=dashboard_auth.SESSION_TTL_SEC,
+                        httponly=True, samesite="strict", path="/")
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page():
+    return LOGIN_HTML
+
+@app.post("/api/login")
+async def login_api(data: dict):
+    if not dashboard_auth.is_password_set():
+        return {"ok": True, "message": "パスワードは設定されていません"}
+    token, error = await asyncio.to_thread(dashboard_auth.login, str(data.get("password", "")))
+    if not token:
+        return JSONResponse(content={"ok": False, "error": error}, status_code=401)
+    response = JSONResponse(content={"ok": True})
+    _set_session_cookie(response, token)
+    return response
+
+@app.post("/api/logout")
+async def logout_api(request: Request):
+    dashboard_auth.logout(request.cookies.get(SESSION_COOKIE))
+    response = JSONResponse(content={"ok": True})
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
+
+@app.get("/api/auth/status")
+async def auth_status_api(request: Request):
+    return {"password_set": dashboard_auth.is_password_set(),
+            "logged_in": dashboard_auth.is_valid_session(request.cookies.get(SESSION_COOKIE))}
+
+@app.post("/api/auth/password")
+async def set_password_api(data: dict):
+    """
+    パスワードの設定/変更。設定済みの場合はミドルウェアでログイン済みを確認したうえで、
+    現在のパスワードも必要 (ログインしたまま離席した画面から勝手に変えられないように)
+    """
+    if dashboard_auth.is_password_set():
+        if not await asyncio.to_thread(dashboard_auth.check_password, str(data.get("current_password", ""))):
+            return JSONResponse(content={"ok": False, "error": "現在のパスワードが違います"}, status_code=403)
+    try:
+        await asyncio.to_thread(dashboard_auth.set_password, data.get("new_password"))
+    except (ValueError, RuntimeError) as e:
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=400)
+    # 既存のセッションは無効になるので、操作した本人は新しいセッションでログイン状態を保つ
+    response = JSONResponse(content={"ok": True, "message": "パスワードを設定しました"})
+    _set_session_cookie(response, dashboard_auth.new_session())
+    return response
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return DASHBOARD_HTML
@@ -1885,7 +2034,7 @@ async def set_mode(data: dict):
 # --- API: 設定の取得 ---
 @app.get("/api/config")
 async def get_config_api():
-    return ConfigManager.load_config()
+    return dashboard_auth.strip_secret(ConfigManager.load_config())  # パスワードのハッシュは返さない
 
 # --- API: 設定の保存 ---
 @app.post("/api/config")
@@ -2032,9 +2181,249 @@ async def restart_system():
     
     threading.Thread(target=delayed_restart).start()
     return {"status": "restarting"}
+
+# --- ソフトウェア更新 (git pull) ---
+# リポジトリ (このファイルの1つ上の階層) を git で確認・更新する。gritcat ユーザーのまま実行する
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 認証の入力待ちで止まらないように (HTTPS のパスワード入力も、SSH の鍵/ホスト確認の質問もしない)。
+# プライベートリポジトリはロボットごとの読み取り専用デプロイキー (~/.ssh/id_ed25519) で取得する想定
+GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C",
+           "GIT_SSH_COMMAND": os.environ.get("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=15")}
+GIT_AUTH_HINT = ("GitHub の認証に失敗しました。このロボットの公開鍵 (~/.ssh/id_ed25519.pub) がリポジトリの "
+                 "Deploy keys に登録されているか、github.com が ~/.ssh/known_hosts にあるか、"
+                 "取得先が SSH の URL (git@github.com:...) になっているかを確認してください。")
+
+def explain_git_error(message):
+    """git の英語のエラーに、認証が原因なら対処方法を添える"""
+    auth_signs = ("Permission denied (publickey)", "Repository not found", "could not read Username",
+                  "Host key verification failed", "Authentication failed", "terminal prompts disabled")
+    if any(sign in message for sign in auth_signs):
+        return f"{GIT_AUTH_HINT} ({message.strip()[:150]})"
+    return message
+# 更新で変更があったら自動でビルドする ROS パッケージ (ロボット側リポジトリで管理しているもの)
+AUTO_BUILD_PACKAGES = ("gritcat_utils", "gpsd_driver")
+# 更新後も残す、ロボットごとのファイル (リポジトリから消える更新を取り込んでも消さない)
+PRESERVED_FILES = ("config.json",)
+
+update_job = {"state": "idle", "log": [], "started": None}   # state: idle | running | restarting | error | done
+update_job_lock = threading.Lock()
+
+def git(*args, timeout=30):
+    return subprocess.run(["git", "-C", REPO_DIR, *args], capture_output=True, text=True, timeout=timeout, env=GIT_ENV)
+
+def git_out(*args, timeout=30):
+    """成功時は標準出力 (前後の空白を除く)、失敗時は None"""
+    try:
+        r = git(*args, timeout=timeout)
+    except Exception:
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+def get_version_info(fetch=False):
+    """ブランチ・現在のコミット・リモートとの差分を返す。fetch=True なら先に GitHub から最新情報を取得する"""
+    info = {"branch": git_out("rev-parse", "--abbrev-ref", "HEAD")}
+    if info["branch"] is None:
+        r = git("status")
+        return {"ok": False, "error": f"Git の情報を取得できません: {(r.stderr or r.stdout).strip()[:200]}"}
+    head = git_out("log", "-1", "--format=%h%x1f%cI%x1f%s")
+    if head:
+        info["commit"], info["commit_date"], info["subject"] = head.split("\x1f", 2)
+    info["upstream"] = git_out("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    # porcelain 形式は行頭の空白に意味があるので、前後の空白を削る git_out は使わない
+    try:
+        dirty = git("status", "--porcelain", "--untracked-files=no").stdout
+    except Exception:
+        dirty = ""
+    info["local_changes"] = [line[3:] for line in dirty.splitlines() if line.strip()]
+    info["fetch_error"] = None
+    if fetch and info["upstream"]:
+        try:
+            r = git("fetch", "--quiet", timeout=30)
+            if r.returncode != 0:
+                info["fetch_error"] = explain_git_error((r.stderr or r.stdout).strip()[:200]) or "fetch に失敗しました"
+        except subprocess.TimeoutExpired:
+            info["fetch_error"] = "GitHub に接続できませんでした (タイムアウト)"
+    info["ahead"] = info["behind"] = None
+    info["new_commits"] = []
+    if info["upstream"]:
+        counts = git_out("rev-list", "--left-right", "--count", "HEAD...@{u}")
+        if counts:
+            info["ahead"], info["behind"] = (int(x) for x in counts.split())
+        log = git_out("log", "--format=%h%x1f%cI%x1f%s", "-20", "HEAD..@{u}") or ""
+        info["new_commits"] = [dict(zip(("commit", "date", "subject"), l.split("\x1f", 2))) for l in log.splitlines() if l]
+    info["ok"] = True
+    return info
+
+def _update_log(message, level="info"):
+    with update_job_lock:
+        update_job["log"].append({"time": time.strftime("%H:%M:%S"), "level": level, "message": message})
+    print(f"[UPDATE] {message}")
+
+def run_system_update():
+    """git pull → (必要なら) ROS パッケージをビルド → プログラムを再起動。別スレッドで実行する"""
+    def fail(message):
+        _update_log(message, "error")
+        emit_robot_event("robot_event", f"ソフトウェア更新に失敗しました: {message}", level="error")
+        with update_job_lock:
+            update_job["state"] = "error"
+
+    try:
+        _update_log("GitHub から最新の情報を取得しています…")
+        info = get_version_info(fetch=True)
+        if not info.get("ok"):
+            return fail(info.get("error"))
+        if info["fetch_error"]:
+            return fail(f"最新の情報を取得できませんでした: {info['fetch_error']}")
+        if not info["behind"]:
+            _update_log("すでに最新です。", "success")
+            with update_job_lock:
+                update_job["state"] = "done"
+            return
+
+        # 更新中にロボットが動かないよう、ユーザープログラムとモーターを止める
+        manager = globals().get("script_manager")
+        if manager:
+            manager.stop_program()
+        command_queue.put({"command": "move", "left": 0, "right": 0})
+
+        old_head = git_out("rev-parse", "HEAD")
+        # ロボットごとのファイル (config.json) は中身を退避し、Git 上の変更をいったん戻してから取り込む。
+        # (ロボットごとに書き換えている config.json がリポジトリ側で変更/削除されると、
+        #  そのままでは「ローカルの変更が上書きされる」として git pull が拒否されるため)
+        preserved = {}
+        for name in PRESERVED_FILES:
+            path = os.path.join(REPO_DIR, name)
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    preserved[name] = f.read()
+                if git_out("ls-files", "--error-unmatch", name) is not None:  # 追跡中のときだけ戻す
+                    git("checkout", "--", name)
+
+        def restore_preserved():
+            for name, content in preserved.items():
+                with open(os.path.join(REPO_DIR, name), "wb") as f:
+                    f.write(content)
+
+        _update_log(f"{info['behind']} 件の更新を取り込んでいます (git pull)…")
+        r = git("pull", "--ff-only", timeout=180)
+        restore_preserved()  # 成功しても失敗してもロボットの設定は元の内容に戻す
+        if r.returncode != 0:
+            detail = (r.stderr or r.stdout).strip()[-300:]
+            explained = explain_git_error(detail)
+            if explained != detail:  # 認証の問題
+                return fail(explained)
+            return fail("取り込めませんでした。ロボット上で変更したファイルが更新とぶつかっているか、"
+                        f"履歴が分岐しています。{detail}")
+        if preserved:
+            _update_log(f"ロボットの設定 ({', '.join(preserved)}) を保持しました。")
+
+        changed = (git_out("diff", "--name-only", old_head, "HEAD") or "").splitlines()
+        new_head = git_out("log", "-1", "--format=%h %s")
+        _update_log(f"更新しました: {new_head} (変更ファイル {len(changed)} 件)", "success")
+
+        packages = sorted({p.split("/")[2] for p in changed
+                           if p.startswith("grit_ws/src/") and p.count("/") >= 3 and p.split("/")[2] in AUTO_BUILD_PACKAGES})
+        if packages:
+            _update_log(f"ROS パッケージをビルドしています: {', '.join(packages)} (数分かかることがあります)…")
+            b = subprocess.run(["colcon", "build", "--packages-select", *packages],
+                               cwd=os.path.join(REPO_DIR, "grit_ws"), capture_output=True, text=True, timeout=900)
+            if b.returncode != 0:
+                return fail(f"ビルドに失敗しました。ロボット上で grit_ws/setup_ros_packages.sh を実行してください。{(b.stderr or b.stdout).strip()[-300:]}")
+            _update_log("ビルドしました。", "success")
+        if any(p.startswith("app/tools/") for p in changed):
+            _update_log("app/tools が更新されました。必要に応じてロボット上で sudo bash app/tools/install_wifi_helper.sh を実行してください。", "warning")
+        if any(p.endswith("requirements.txt") for p in changed):
+            _update_log("Python の依存パッケージ (requirements.txt) が更新されました。必要に応じて手動でインストールしてください。", "warning")
+
+        _update_log("プログラムを再起動します…")
+        emit_robot_event("robot_event", f"ソフトウェアを更新しました ({new_head})。プログラムを再起動します。", level="success")
+        with update_job_lock:
+            update_job["state"] = "restarting"
+        time.sleep(1.5)  # 画面が状態を受け取れるよう少し待つ
+        os.execv(sys.executable, ['python3'] + sys.argv)
+    except Exception as e:
+        fail(str(e))
+
+@app.get("/api/update/status")
+async def update_status_api(fetch: bool = False):
+    """現在のバージョンと、(fetch=true なら GitHub と比べた) 更新の有無"""
+    info = await asyncio.to_thread(get_version_info, fetch)
+    return info if info.get("ok") else JSONResponse(content=info, status_code=500)
+
+@app.post("/api/update")
+async def start_update_api():
+    with update_job_lock:
+        if update_job["state"] in ("running", "restarting"):
+            return JSONResponse(content={"ok": False, "error": "更新処理を実行中です"}, status_code=409)
+        update_job.update(state="running", log=[], started=time.time())
+    threading.Thread(target=run_system_update, daemon=True).start()
+    return {"ok": True}
+
+@app.get("/api/update/progress")
+async def update_progress_api():
+    with update_job_lock:
+        return {"state": update_job["state"], "log": list(update_job["log"])}
+
+# --- API: ロボット本体 (OS) の電源操作 ---
+@app.post("/api/system/power")
+async def system_power_api(data: dict):
+    """ロボット本体をシャットダウン/再起動する。data: {"action": "poweroff" | "reboot"}"""
+    action = data.get("action")
+    if action not in POWER_COMMANDS:
+        return JSONResponse(content={"ok": False, "error": "action は poweroff か reboot を指定してください"}, status_code=400)
+    # 実行してから失敗に気づくのでは遅いので、権限を先に確認する
+    if not await asyncio.to_thread(can_control_power, action):
+        return JSONResponse(content={"ok": False, "error": POWER_PERMISSION_MISSING}, status_code=403)
+    manager = globals().get("script_manager")
+    if manager is None:
+        return JSONResponse(content={"ok": False, "error": "システムの準備ができていません"}, status_code=503)
+    # 応答を返してから実行する (system_power は2秒待ってから OS に命令を出す)
+    threading.Thread(target=manager.system_power, args=(action,), daemon=True).start()
+    return {"ok": True, "message": f"ロボット本体を{POWER_LABELS[action]}します。"}
 # ==========================================================
 # ローカルダッシュボード HTML
 # ==========================================================
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ログイン - Robot Local Dashboard</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; background: #f4f7f9; color: #333; margin: 0; padding: 20px; }
+        .box { max-width: 360px; margin: 80px auto; background: white; border-radius: 12px; padding: 28px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        h1 { font-size: 1.2em; margin: 0 0 16px 0; }
+        input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 1em; }
+        button { width: 100%; margin-top: 12px; padding: 12px; border: none; border-radius: 8px; background: #3b82f6; color: white; font-weight: bold; cursor: pointer; }
+        .error { color: #dc2626; font-size: 0.85em; min-height: 1.2em; margin-top: 8px; }
+    </style>
+</head>
+<body>
+    <form class="box" onsubmit="login(event)">
+        <h1>ロボット管理ダッシュボード</h1>
+        <label for="password">パスワード</label>
+        <input type="password" id="password" autocomplete="current-password" autofocus required>
+        <button type="submit">ログイン</button>
+        <p id="error" class="error"></p>
+    </form>
+    <script>
+        async function login(e) {
+            e.preventDefault();
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ password: document.getElementById('password').value })
+            });
+            const body = await res.json();
+            if (body.ok) location.href = '/';
+            else document.getElementById('error').textContent = body.error;
+        }
+    </script>
+</body>
+</html>
+"""
+
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="ja">
@@ -2061,14 +2450,31 @@ DASHBOARD_HTML = """
         .tag { font-size: 0.72em; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3b82f6; }
         .tag-muted { background: #f3f4f6; color: #6b7280; }
         .btn-remove { padding: 6px 10px; background: transparent; color: #dc2626; border: 1px solid #dc2626; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .update-info { font-size: 0.9em; line-height: 1.7; margin-bottom: 8px; word-break: break-all; }
+        .update-info code { background: #f3f4f6; padding: 1px 6px; border-radius: 4px; }
+        .update-commits, .update-log { list-style: none; padding: 0; margin: 8px 0 0 0; font-size: 0.85em; }
+        .update-commits li { padding: 4px 0; border-bottom: 1px solid #f3f4f6; }
+        .update-log li { padding: 2px 0; font-family: monospace; }
+        .tag-warn { background: #fef3c7; color: #b45309; }
+        .tag-error { background: #fee2e2; color: #dc2626; }
+        .log-error { color: #dc2626; } .log-warning { color: #b45309; } .log-success { color: #16a34a; }
         select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; margin-top: 5px; box-sizing: border-box; background: #fafafa; }
         @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>ロボット管理ダッシュボード</h1>
-        
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+            <h1>ロボット管理ダッシュボード</h1>
+            <button id="logout_btn" class="btn btn-sub" style="display:none;" onclick="logout()">ログアウト</button>
+        </div>
+        <!-- パスワード未設定の警告 (設定済みなら非表示) -->
+        <div id="auth_warning" class="card" style="display:none; border:1px solid #f59e0b; background:#fffbeb;">
+            <b>ダッシュボードのパスワードが設定されていません。</b>
+            <p class="hint">同じネットワークにいる人なら誰でも設定の変更や再起動ができる状態です。下の「ダッシュボードのパスワード」で設定してください。</p>
+        </div>
+
         <div class="grid">
             <!-- モード設定 -->
             <div class="card">
@@ -2171,14 +2577,93 @@ DASHBOARD_HTML = """
             <p id="cam_message" class="hint"></p>
         </div>
 
+        <!-- ダッシュボードのパスワード -->
+        <div class="card">
+            <h2 class="section-title">ダッシュボードのパスワード</h2>
+            <div id="pw_current_row">
+                <label for="pw_current">現在のパスワード</label>
+                <input type="password" id="pw_current" autocomplete="current-password">
+            </div>
+            <label for="pw_new">新しいパスワード (8文字以上)</label>
+            <input type="password" id="pw_new" autocomplete="new-password">
+            <label for="pw_confirm">新しいパスワード (確認)</label>
+            <input type="password" id="pw_confirm" autocomplete="new-password">
+            <button class="btn btn-move" onclick="changePassword()" id="pw_btn">パスワードを設定</button>
+            <p id="pw_message" class="hint"></p>
+            <p class="hint">パスワードを忘れた場合は、ロボットに SSH で入り <code>python3 ~/ekagaku_gritcat/app/tools/reset_dashboard_password.py</code> を実行してください。</p>
+        </div>
+
+        <!-- ソフトウェア更新 -->
+        <div class="card">
+            <h2 class="section-title">ソフトウェア更新</h2>
+            <div id="update_info" class="update-info">読み込み中…</div>
+            <span id="update_badge" class="tag tag-muted">確認中</span>
+            <ul id="update_commits" class="update-commits"></ul>
+            <div style="display:flex; gap:10px; margin-top:12px;">
+                <button class="btn btn-sub" style="flex:1;" onclick="loadUpdateStatus(true)" id="update_check_btn">更新を確認</button>
+                <button class="btn btn-move" style="flex:1; margin-top:0;" onclick="startUpdate()" id="update_run_btn" disabled>更新して再起動</button>
+            </div>
+            <ul id="update_log" class="update-log"></ul>
+            <p class="hint">GitHub から最新のプログラムを取り込み (git pull)、プログラムを再起動します。実行中のプログラムとモーターは停止します。ロボットの設定 (config.json) は保持されます。</p>
+        </div>
+
         <div class="card">
             <h2 class="section-title">システム操作</h2>
             <p class="hint">設定変更後は再起動を行うことで、全てのセンサーと接続設定が完全にリセット・反映されます。</p>
-            <button class="btn btn-restart" style="background:#6b7280; color:white; width:100%;" onclick="restartSystem()">システムを再起動 (Reflesh)</button>
+            <button class="btn btn-restart" style="background:#6b7280; color:white; width:100%;" onclick="restartSystem()">プログラムを再起動 (Reflesh)</button>
+
+            <h3 class="sub-title" style="margin-top:16px;">ロボット本体の電源</h3>
+            <p class="hint">実行中のプログラムとモーターを止めてから、Raspberry Pi を再起動/シャットダウンします。シャットダウン後に再び起動するには、電源を入れ直してください。</p>
+            <div style="display:flex; gap:10px;">
+                <button class="btn" style="flex:1; background:#e5e7eb; color:#333;" onclick="systemPower('reboot')">ロボットを再起動</button>
+                <button class="btn" style="flex:1; background:transparent; color:#dc2626; border:1px solid #dc2626;" onclick="systemPower('poweroff')">シャットダウン</button>
+            </div>
+            <p id="power_message" class="hint"></p>
         </div>
     </div>
 
     <script>
+        // --- 0. 認証 ---
+        // 操作中にセッションが切れた (401) らページを読み込み直してログイン画面を出す
+        const _fetch = window.fetch.bind(window);
+        window.fetch = async (...args) => {
+            const res = await _fetch(...args);
+            if (res.status === 401) {
+                try { if ((await res.clone().json()).login_required) location.reload(); } catch (e) { /* JSON 以外 */ }
+            }
+            return res;
+        };
+
+        async function loadAuthStatus() {
+            const s = await (await fetch('/api/auth/status')).json();
+            document.getElementById('auth_warning').style.display = s.password_set ? 'none' : 'block';
+            document.getElementById('logout_btn').style.display = s.password_set ? 'inline-block' : 'none';
+            document.getElementById('pw_current_row').style.display = s.password_set ? 'block' : 'none';
+            document.getElementById('pw_btn').textContent = s.password_set ? 'パスワードを変更' : 'パスワードを設定';
+        }
+
+        async function changePassword() {
+            const msg = document.getElementById('pw_message');
+            const newPw = document.getElementById('pw_new').value;
+            if (newPw !== document.getElementById('pw_confirm').value) { msg.textContent = '新しいパスワードが一致しません。'; return; }
+            const res = await fetch('/api/auth/password', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ current_password: document.getElementById('pw_current').value, new_password: newPw })
+            });
+            const body = await res.json();
+            msg.textContent = body.ok ? (body.message + '。他の端末でログインしていた場合は再ログインが必要です。') : ('設定できませんでした: ' + body.error);
+            if (body.ok) {
+                for (const id of ['pw_current', 'pw_new', 'pw_confirm']) document.getElementById(id).value = '';
+                loadAuthStatus();
+            }
+        }
+
+        async function logout() {
+            await fetch('/api/logout', { method: 'POST' });
+            location.reload();
+        }
+
         // --- 1. ページ読み込み時に1回だけ実行する処理 (Configの読み込み) ---
         async function loadInitialConfig() {
             try {
@@ -2435,6 +2920,118 @@ DASHBOARD_HTML = """
             }
         }
 
+        // --- ソフトウェア更新 ---
+        // コミットメッセージやファイル名は HTML として埋め込まず textContent で表示する
+        function li(text, className) {
+            return Object.assign(document.createElement('li'), { textContent: text, className: className || '' });
+        }
+
+        async function loadUpdateStatus(fetchRemote = false) {
+            const info = document.getElementById('update_info');
+            const badge = document.getElementById('update_badge');
+            const commits = document.getElementById('update_commits');
+            const runBtn = document.getElementById('update_run_btn');
+            const checkBtn = document.getElementById('update_check_btn');
+            checkBtn.disabled = true;
+            if (fetchRemote) { badge.className = 'tag tag-muted'; badge.textContent = 'GitHub に確認中…'; }
+            try {
+                const res = await fetch('/api/update/status' + (fetchRemote ? '?fetch=true' : ''));
+                const s = await res.json();
+                if (!s.ok) { info.textContent = s.error; badge.className = 'tag tag-error'; badge.textContent = '取得失敗'; return; }
+                info.innerHTML = '';
+                const line = (label, value) => {
+                    const row = document.createElement('div');
+                    row.append(label + ': ');
+                    const c = document.createElement('code'); c.textContent = value; row.appendChild(c);
+                    info.appendChild(row);
+                };
+                line('ブランチ', s.branch + (s.upstream ? ` (追跡先 ${s.upstream})` : ' (追跡先なし)'));
+                line('バージョン', `${s.commit} ${s.subject}`);
+                line('日時', new Date(s.commit_date).toLocaleString('ja-JP'));
+                if (s.local_changes.length) line('ロボット上で変更されたファイル', s.local_changes.join(', '));
+
+                commits.innerHTML = '';
+                if (s.fetch_error) {
+                    badge.className = 'tag tag-error'; badge.textContent = '確認できません: ' + s.fetch_error;
+                } else if (!s.upstream) {
+                    badge.className = 'tag tag-warn'; badge.textContent = '追跡先のブランチがないため比較できません';
+                } else if (s.behind > 0) {
+                    badge.className = 'tag tag-warn';
+                    badge.textContent = `${s.behind} 件の更新があります` + (fetchRemote ? '' : ' (前回の確認時点)');
+                    for (const c of s.new_commits) commits.appendChild(li(`${c.commit}  ${c.subject}`));
+                } else {
+                    badge.className = 'tag';
+                    badge.textContent = fetchRemote ? '最新です' : '最新 (前回の確認時点。「更新を確認」で GitHub と比較)';
+                }
+                if (s.ahead > 0) commits.appendChild(li(`※ ロボット上に未送信のコミットが ${s.ahead} 件あります`, 'log-warning'));
+                runBtn.disabled = !(s.behind > 0) || !!s.fetch_error;
+            } catch (e) {
+                badge.className = 'tag tag-error'; badge.textContent = '取得に失敗しました';
+            } finally {
+                checkBtn.disabled = false;
+            }
+        }
+
+        async function startUpdate() {
+            if (!confirm('最新のプログラムを取り込み、プログラムを再起動します。実行中のプログラムとモーターは停止します。よろしいですか？')) return;
+            const logEl = document.getElementById('update_log');
+            logEl.innerHTML = '';
+            document.getElementById('update_run_btn').disabled = true;
+            const res = await fetch('/api/update', { method: 'POST' });
+            const body = await res.json();
+            if (!body.ok) { logEl.appendChild(li(body.error, 'log-error')); return; }
+            pollUpdateProgress();
+        }
+
+        async function pollUpdateProgress() {
+            const logEl = document.getElementById('update_log');
+            let p;
+            try {
+                p = await (await fetch('/api/update/progress')).json();
+            } catch (e) {
+                // 再起動中はつながらない。復帰したらページを読み込み直す
+                logEl.appendChild(li('再起動を待っています…'));
+                return waitForRestart();
+            }
+            logEl.innerHTML = '';
+            for (const entry of p.log) logEl.appendChild(li(`${entry.time}  ${entry.message}`, 'log-' + entry.level));
+            if (p.state === 'running') return setTimeout(pollUpdateProgress, 1000);
+            if (p.state === 'restarting') return setTimeout(waitForRestart, 3000);
+            loadUpdateStatus(false);
+        }
+
+        async function waitForRestart() {
+            for (let i = 0; i < 60; i++) {
+                try {
+                    const r = await fetch('/api/update/status');
+                    if (r.ok) { location.reload(); return; }
+                } catch (e) { /* まだ再起動中 */ }
+                await new Promise(r => setTimeout(r, 2000));
+            }
+            document.getElementById('update_log').appendChild(li('再起動の完了を確認できませんでした。しばらくしてからページを再読み込みしてください。', 'log-error'));
+        }
+
+        async function systemPower(action) {
+            const text = action === 'poweroff'
+                ? "ロボット本体をシャットダウンします。\\n再び起動するには電源を入れ直す必要があります。よろしいですか？"
+                : "ロボット本体 (Raspberry Pi) を再起動します。1〜2分ほど操作できなくなります。よろしいですか？";
+            if (!confirm(text)) return;
+            const msg = document.getElementById('power_message');
+            try {
+                const res = await fetch('/api/system/power', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ action })
+                });
+                const body = await res.json();
+                msg.textContent = body.ok
+                    ? body.message + (action === 'reboot' ? ' 1〜2分後にこのページを再読み込みしてください。' : ' 電源ランプの点滅が止まってから電源を切ってください。')
+                    : ('実行できませんでした: ' + body.error);
+            } catch (e) {
+                msg.textContent = '送信に失敗しました。';
+            }
+        }
+
         async function restartSystem() {
             if(!confirm("システム（Pythonプロセス）を再起動します。よろしいですか？")) return;
             const res = await fetch('/api/restart', { method: 'POST' });
@@ -2449,6 +3046,8 @@ DASHBOARD_HTML = """
         loadInitialConfig();
         loadCameraConfig();
         loadWifi();
+        loadUpdateStatus(false);  // 表示を速くするため最初はネットワークに問い合わせない
+        loadAuthStatus();
 
         // ステータス（センサー値）だけを3秒おきに更新
         setInterval(updateStatus, 3000);
