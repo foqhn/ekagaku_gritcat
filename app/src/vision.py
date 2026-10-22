@@ -8,6 +8,8 @@ MATLAB の Image Processing Toolbox に合わせた名前・考え方で、OpenC
   - グレー画像は 2 次元の uint8 配列
   - 2値画像 (マスク) は True/False の配列 (MATLAB の logical)
   - rgb2hsv の結果は 0〜1 の小数 (H も 0〜1)
+  - rgb2lab の結果は L が 0〜100、a/b がおよそ -100〜100 の小数
+  - rgb2ycbcr の結果は uint8 で Y が 16〜235、Cb/Cr が 16〜240
   - 座標は (x, y)。0 から数え、左上が原点 (※ MATLAB は 1 から数える)
   - どの関数も、受け取った画像は書き換えず、新しい配列を返す
 
@@ -31,6 +33,16 @@ COLOR_PRESETS = {
     "green":  ([0.22, 0.35, 0.25], [0.45, 1.00, 1.00]),
     "blue":   ([0.55, 0.40, 0.25], [0.72, 1.00, 1.00]),
 }
+
+
+# 色空間の変換係数
+_RGB2XYZ = np.array([[0.4124564, 0.3575761, 0.1804375],
+                     [0.2126729, 0.7151522, 0.0721750],
+                     [0.0193339, 0.1191920, 0.9503041]], dtype=np.float32)
+_WHITE_D65 = np.array([0.95047, 1.0, 1.08883], dtype=np.float32)
+_RGB2YCBCR = np.array([[65.481, 128.553, 24.966],
+                       [-37.797, -74.203, 112.0],
+                       [112.0, -93.786, -18.214]], dtype=np.float32)
 
 
 def set_display_callback(callback):
@@ -116,6 +128,31 @@ def rgb2hsv(img):
     return hsv
 
 
+def rgb2lab(img):
+    """RGB → L*a*b* (sRGB・D65。MATLAB の rgb2lab と同じ)。L は 0〜100、a/b はおよそ -100〜100 の小数"""
+    _check_image(img)
+    if img.ndim != 3:
+        raise ValueError("rgb2lab にはカラー画像を渡してください")
+    rgb = _to_uint8(img).astype(np.float32) / 255.0
+    lin = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+    xyz = lin @ _RGB2XYZ.T / _WHITE_D65
+    f = np.where(xyz > (6 / 29) ** 3, np.cbrt(xyz), xyz / (3 * (6 / 29) ** 2) + 4 / 29)
+    L = 116 * f[:, :, 1] - 16
+    a = 500 * (f[:, :, 0] - f[:, :, 1])
+    b = 200 * (f[:, :, 1] - f[:, :, 2])
+    return np.dstack([L, a, b]).astype(np.float32)
+
+
+def rgb2ycbcr(img):
+    """RGB → YCbCr (ITU-R BT.601。MATLAB の rgb2ycbcr と同じ)。uint8 で Y は 16〜235、Cb/Cr は 16〜240"""
+    _check_image(img)
+    if img.ndim != 3:
+        raise ValueError("rgb2ycbcr にはカラー画像を渡してください")
+    rgb = _to_uint8(img).astype(np.float32) / 255.0
+    ycbcr = rgb @ _RGB2YCBCR.T + np.array([16.0, 128.0, 128.0], dtype=np.float32)
+    return np.clip(np.round(ycbcr), 0, 255).astype(np.uint8)
+
+
 def imresize(img, scale):
     """拡大・縮小。scale=0.5 で半分の大きさ"""
     _check_image(img)
@@ -175,12 +212,49 @@ def inrange(img, lo, hi):
     return mask
 
 
+_COLOR_SPACES = {
+    "rgb": lambda img: _to_uint8(img),
+    "hsv": rgb2hsv,
+    "lab": rgb2lab,
+    "ycbcr": rgb2ycbcr,
+}
+
+
+def createMask(img, colorspace, lo, hi):
+    """
+    カラー画像を色空間 colorspace ('rgb' / 'hsv' / 'lab' / 'ycbcr') に変換し、
+    3つのチャンネルがすべて lo〜hi に入る画素を True にしたマスクを返す
+    (MATLAB の Color Thresholder が書き出す createMask と同じ考え方)。
+    値の範囲は MATLAB と同じ: rgb 0〜255、hsv 0〜1、lab L 0〜100・a/b 約 -100〜100、ycbcr 16〜240。
+    hsv で H の lo > hi のときは、赤のように 0/1 をまたぐ範囲として扱う
+    """
+    _check_image(img)
+    if img.ndim != 3:
+        raise ValueError("createMask にはカラー画像を渡してください")
+    space = str(colorspace).lower()
+    if space not in _COLOR_SPACES:
+        raise ValueError("色空間は 'rgb', 'hsv', 'lab', 'ycbcr' のどれかを指定してください")
+    lo = np.asarray(lo, dtype=np.float32).ravel()
+    hi = np.asarray(hi, dtype=np.float32).ravel()
+    if lo.size != 3 or hi.size != 3:
+        raise ValueError("最小値・最大値は 3 つの数値で指定してください (例: [0.95, 0.4, 0.3])")
+    converted = _COLOR_SPACES[space](img)
+    mask = np.ones(converted.shape[:2], dtype=bool)
+    for c in range(3):
+        ch = converted[:, :, c]
+        if space == "hsv" and c == 0 and lo[0] > hi[0]:
+            mask &= (ch >= lo[0]) | (ch <= hi[0])   # 色相の 0/1 またぎ
+        else:
+            mask &= (ch >= lo[c]) & (ch <= hi[c])
+    return mask
+
+
 def color_mask(img, color):
     """初級用: カラー画像から指定した色 (red/yellow/green/blue) の部分を True にしたマスク"""
     if color not in COLOR_PRESETS:
         raise ValueError(f"色は {', '.join(COLOR_PRESETS)} のどれかを指定してください")
     lo, hi = COLOR_PRESETS[color]
-    return inrange(rgb2hsv(img), lo, hi)
+    return createMask(img, "hsv", lo, hi)
 
 
 # ----------------------------------------------------------
